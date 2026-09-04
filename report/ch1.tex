@@ -1,0 +1,661 @@
+% ============================================================
+%  第一章：国内大模型 API 基础实验教程
+% ============================================================
+\clearpage
+\section{第一章：国内大模型 API 基础实验教程}
+
+\subsection{背景}
+
+大模型 API 本质上是一个带鉴权的 HTTP 服务。客户端通过 \texttt{POST} 请求发送 JSON 数据，
+Header 中携带 \texttt{Content-Type: application/json} 与
+\texttt{Authorization: Bearer $<$API\_KEY$>$}，Body 中通常包含 \texttt{model}、
+\texttt{messages}、\texttt{stream}、\texttt{temperature}、\texttt{response\_format} 或
+\texttt{tools} 等字段。响应同样是 JSON，常见字段包括 \texttt{choices}、
+\texttt{message}、\texttt{usage}、\texttt{finish\_reason} 和错误信息。只有先把
+``HTTP 请求—JSON 请求体—鉴权—响应解析—错误处理—费用控制''这条链路打牢，
+后续的 agent、工具调用和 DSH 插件才不会变成黑箱。
+
+国内主流平台（火山方舟、Kimi、阿里云百炼）均提供 OpenAI-compatible 接口，
+同一段 OpenAI SDK 代码通常只需替换 API key、\texttt{base\_url} 和 \texttt{model}
+即可切换平台。但不同平台在地域、模型名、Endpoint ID、工具调用、JSON mode、
+流式 usage、错误码和限流策略上仍有差异，本章将逐一记录这些差异。
+
+本章按任务书第一章的 7 个必做实验展开：API key 与环境变量、curl 调用、
+Python 统一调用、流式输出、JSON 输出、错误处理、模型对比。
+
+\subsection{环境}
+
+本章全部实验在 Windows 本机完成，运行环境见表~\ref{tab:ch1_env}。
+Python 使用 Miniconda 的 \texttt{ML-base} 环境（Python 3.11.15），
+通过 \texttt{openai} SDK（v2.37.0）调用各平台。
+
+\begin{table}[H]
+\centering
+\caption{第 1 章实验环境}
+\label{tab:ch1_env}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lp{9.2cm}}
+\toprule
+\textbf{项目} & \textbf{版本/配置} \\
+\midrule
+操作系统 & Windows 11 专业版（build 26200 / 25H2；PowerShell 7 终端） \\
+Python & 3.11.15（Miniconda 环境 ML-base） \\
+openai SDK & 2.37.0 \\
+matplotlib & 3.10.9（对比图绘制） \\
+Node.js / npm & v24.18.0 / 12.0.2 \\
+curl & 8.21.0（libcurl/8.21.0 Schannel） \\
+jq & 1.8.2 \\
+模型 1 & Kimi kimi-k3（\nolinkurl{api.moonshot.cn/v1}） \\
+模型 2 & 小米 MiMo mimo-v2.5-pro（\nolinkurl{api.xiaomimimo.com/v1}） \\
+模型 3 & Qwen qwen-plus（\nolinkurl{dashscope.aliyuncs.com/compatible-mode/v1}） \\
+模型 4 & 火山方舟（\nolinkurl{ark.cn-beijing.volces.com/api/v3}，Model/Endpoint ID） \\
+运行日期 & 2026-08-18 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+三个平台的 API key 统一通过环境变量管理（表~\ref{tab:ch1_keys}），
+源码中不出现任何明文密钥；报告中的截图与日志一律脱敏。
+
+\textbf{环境限制说明}：本实验在 DSH（DeepSeek Harness）沙箱环境中完成部分
+运行。沙箱会拦截 curl（schannel 后端）访问 Windows 证书凭据存储
+（\texttt{SEC\_E\_NO\_CREDENTIALS}），因此实验 2 的 curl 调用在放宽权限的
+模式下执行；普通终端（非沙箱）运行同一 curl 命令无此限制。沙箱同样会把
+子进程窗口隔离在不可见窗口站，故实验截图由用户在普通终端手动抓取。
+若在普通环境下复现，所有命令均可直接运行（见可复现教程一节）。
+
+\begin{table}[H]
+\centering
+\caption{API key 环境变量约定（截图/日志必须脱敏）}
+\label{tab:ch1_keys}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lp{3.4cm}p{3.4cm}p{3.6cm}}
+\toprule
+\textbf{平台} & \textbf{环境变量} & \textbf{申请入口} & \textbf{本实验状态} \\
+\midrule
+火山方舟 & \texttt{ARK\_API\_KEY} & \nolinkurl{console.volcengine.com/ark} & 已注册（图~\ref{fig:ch1_ark_console}） \\
+Kimi（月之暗面） & \texttt{MOONSHOT\_API\_KEY} & \nolinkurl{platform.moonshot.cn} & 已注册并调用（图~\ref{fig:ch1_kimi_console}） \\
+小米 MiMo & \texttt{MIMO\_API\_KEY} & \nolinkurl{platform.xiaomimimo.com} & 已注册并调用（图~\ref{fig:ch1_mimo_console}） \\
+阿里云百炼 & \texttt{DASHSCOPE\_API\_KEY} & \nolinkurl{bailian.console.aliyun.com} & 已注册（图~\ref{fig:ch1_qwen_console}） \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{实验步骤}
+
+\subsubsection{实验 1：API key 与环境变量}
+
+在 \texttt{code/ch1-api/.env} 中统一配置三个平台的 key（该文件已被
+\texttt{.gitignore} 忽略，严禁提交仓库）：
+
+\begin{verbatim}
+ARK_API_KEY=
+MOONSHOT_API_KEY=
+DASHSCOPE_API_KEY=
+\end{verbatim}
+
+脚本通过 \texttt{common.load\_env()} 读取该文件并写入环境变量，
+读取时遵循 ``已存在的环境变量不覆盖'' 原则，保证 CI/服务器场景下
+可以直接用系统环境变量注入密钥。密钥在使用与记录时均做脱敏处理
+（只显示前 6 位与后 4 位）。
+
+\subsubsection{实验 2：curl 调用}
+
+curl 是最直接的 HTTP 客户端，适合验证 ``大模型 API 就是一个带鉴权的 HTTP
+服务''这一本质。以 Kimi 为例（完整命令见 \texttt{notes/curl\_calls.md}）：
+
+\begin{verbatim}
+curl.exe -sS https://api.moonshot.cn/v1/chat/completions `
+  -H "Content-Type: application/json" `
+  -H "Authorization: Bearer $env:MOONSHOT_API_KEY" `
+  -d "{\"model\":\"kimi-k3\",\"messages\":[{\"role\":\"user\",
+       \"content\":\"用一句话介绍 HTTP\"}],\"max_tokens\":100}"
+\end{verbatim}
+
+要点：\texttt{-H} 指定请求头（Content-Type 声明请求体为 JSON，
+Authorization 携带 Bearer token）；\texttt{-d} 为 JSON 请求体；
+响应中的 HTTP 状态码是判断结果的第一信号（200 成功、400 请求体错误、
+401 鉴权失败、404 路径错误、429 限流）。对小米 MiMo 只需替换
+\texttt{base\_url}（\texttt{api.xiaomimimo.com/v1}）、\texttt{Authorization} 与
+\texttt{model} 三项，同样体现了 OpenAI-compatible 的低迁移成本。
+
+\subsubsection{实验 3：Python 统一调用脚本}
+
+按照任务书给出的骨架，实现 \texttt{unified\_call.py}：通过 provider 名称
+切换 \texttt{base\_url}、\texttt{model} 与 \texttt{api\_key}，同一问题同时
+调用两个模型，并输出响应内容与 usage：
+
+\begin{verbatim}
+PROVIDERS = {
+    "kimi": {"env": "MOONSHOT_API_KEY",
+             "base_url": "https://api.moonshot.cn/v1",
+             "model": "kimi-k3"},
+    "mimo": {"env": "MIMO_API_KEY",
+             "base_url": "https://api.xiaomimimo.com/v1",
+             "model": "mimo-v2.5-pro"},
+    "ark":  {"env": "ARK_API_KEY",
+             "base_url": "https://ark.cn-beijing.volces.com/"
+                        "api/v3",
+             "model": "<Model ID 或 Endpoint ID>"},
+}
+
+resp = client.chat.completions.create(
+    model=cfg["model"],
+    messages=[{"role": "system", "content": ...},
+              {"role": "user", "content": prompt}])
+print(resp.choices[0].message.content)
+print(resp.usage.model_dump())
+\end{verbatim}
+
+\subsubsection{实验 4：流式输出}
+
+启用 \texttt{stream=True} 后，服务端以 SSE 方式逐个返回 chunk，
+每个 chunk 的 \texttt{delta.content} 字段是增量文本；
+通过 \texttt{stream\_options} 参数（设为 \texttt{include\_usage=True}）
+可在流末尾拿到 usage。流式输出的价值在于首字节延迟（TTFT）远小于完整响应时间，
+用户可以在生成过程中就看到内容。本章同时做了一次普通（非流式）调用
+作为对照，比较 TTFT 与总耗时。
+
+\subsubsection{实验 5：JSON 输出}
+
+通过 \texttt{response\_format=\{"type": "json\_object"\}} 强制模型输出合法
+JSON，再让模型按固定 schema 组织内容（课程计划：\texttt{title}、
+\texttt{tasks}、\texttt{deadline}、\texttt{risks}），最后用 Python
+\texttt{json.loads} 解析并逐字段校验。该实验对应真实工程中
+``模型输出结构化数据供程序消费''的常见需求。
+
+\subsubsection{实验 6：错误处理}
+
+故意构造四类错误请求并记录错误码与排查过程：
+\begin{enumerate}[leftmargin=4em,itemsep=0pt,topsep=2pt]
+    \item 错误 API key（无效密钥），预期 401；
+    \item 错误模型名（不存在的 model），预期 400/404；
+    \item 错误 base\_url（路径后追加 \texttt{/badpath}），预期 404；
+    \item 请求体缺字段（\texttt{messages} 缺失），预期 400。
+\end{enumerate}
+每类错误都记录异常类型、HTTP 状态码与服务端返回的错误信息，
+并给出排查建议（见实验结果小节）。
+
+\subsubsection{实验 7：模型对比}
+
+同一中文任务（输出一个 JSON 格式的学习计划）分别调用 Kimi 与 MiMo，
+比较四项指标：内容质量（响应字数、要点覆盖）、格式遵循（JSON 是否可解析）、
+速度（TTFT 与总耗时）、费用（token 用量 × 官方单价估算）。
+对比结果以表格与柱状图（图~\ref{fig:ch1_compare}）呈现。
+
+\subsection{结果}
+
+本节给出各实验的真实运行输出。每个实验均保留了两种证据：\textbf{真实运行窗口截图}
+（图~\ref{fig:ch1_env} 至图~\ref{fig:ch1_compare_terminal}，2026-08-18 抓取，
+截图中的 API key 均已脱敏或从未显示）与 UTF-8 原始日志
+（\texttt{evidence/ch1/} 目录），两者内容一致、相互印证。
+
+\subsubsection{实验 1 结果：环境与 API key 配置}
+
+环境检查真实运行窗口见图~\ref{fig:ch1_env}：系统为 Windows 11 专业版
+（build 26200 / 25H2，NT 内核版本号为 10.0.26200，\texttt{platform} 模块
+因此显示 Windows 10），Python 3.11.15、Node.js v24.18.0；
+\texttt{MOONSHOT\_API\_KEY} 与 \texttt{MIMO\_API\_KEY} 已配置（脱敏显示）；
+\texttt{ARK\_API\_KEY}、\texttt{DASHSCOPE\_API\_KEY} 对应平台账号已注册并
+持有 key（见下方控制台截图），仅未写入本机 \texttt{.env}（本实验未调用这两个平台）。
+
+API key 由作者提前在平台注册获取（key 申请即控制台开通，申请后即可在
+控制台创建与管理 API key），四个国内平台的控制台均已注册并持有 API key：
+Kimi（图~\ref{fig:ch1_kimi_console}）、小米 MiMo（图~\ref{fig:ch1_mimo_console}）、
+火山方舟（图~\ref{fig:ch1_ark_console}）、阿里云百炼（图~\ref{fig:ch1_qwen_console}）；
+另附 DeepSeek 平台控制台（图~\ref{fig:ch1_ds_console}）作为国内
+OpenAI-compatible 平台通用界面的补充示例。所有截图均未包含 key 明文
+（平台本身以星号/部分字符遮挡）；DeepSeek 截图中的充值余额已遮挡，显示的
+累计消费金额为账户历史统计；MiMo 控制台显示的累计消费（¥0.21）与本实验的
+费用估算（表~\ref{tab:ch1_cost}）量级一致，可互相印证。
+
+\textbf{实际调用的 provider 选择}：本实验实际调用使用 Kimi 与小米 MiMo
+两个 provider（满足任务书"至少两个国内 provider 调通"）。选择主要出于经济
+考虑：阿里云百炼（Qwen）与火山方舟的新用户免费赠送 token 额度已在使用本
+实验之前消耗完毕（火山方舟对新注册用户赠送免费 token 试用额度；阿里云百炼
+亦提供新用户免费额度），继续使用需按量付费充值；而 Kimi、小米 MiMo 与
+DeepSeek 账户仍有可用余额，故优先调用有余额的 Kimi 与 MiMo 完成实验
+（DeepSeek 账户亦有余额，可作备用 provider）。火山方舟与阿里云百炼的
+API key 均已注册（图~\ref{fig:ch1_ark_console}、图~\ref{fig:ch1_qwen_console}），
+配置环境变量后即可调用（见可复现教程）。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{api_key3.jpg}
+\caption{实验 1：Kimi 平台（platform.moonshot.cn）控制台计费明细页面
+——kimi-k3 调用记录与输入/输出 Tokens（2026-08-19 多笔调用；API Key
+名称与项目 ID 均已脱敏，无 key 明文）。}
+\label{fig:ch1_kimi_console}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{api_key1.png}
+\caption{实验 1：小米 MiMo 平台（platform.xiaomimimo.com）控制台账单及用量页面（累计消费 ¥0.21，无 key 明文）。}
+\label{fig:ch1_mimo_console}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{api_key4.png}
+\caption{实验 1：火山方舟（console.volcengine.com/ark）API Key 管理页面（key 以星号遮挡）。}
+\label{fig:ch1_ark_console}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{api_key5.png}
+\caption{实验 1：阿里云百炼（bailian.console.aliyun.com）API Key 管理页面（key 以 \texttt{sk-****d32b} 形式部分显示）。}
+\label{fig:ch1_qwen_console}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{api_key2.png}
+\caption{实验 1：DeepSeek 开放平台（platform.deepseek.com）控制台用量信息页面（充值余额已遮挡；累计消费为账户历史统计，无 key 明文）。}
+\label{fig:ch1_ds_console}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{ch1_env_check.png}
+\caption{实验 1：环境检查与 API key 配置状态的真实运行窗口（key 已脱敏显示）。}
+\label{fig:ch1_env}
+\end{figure}
+
+\subsubsection{实验 2 结果：curl 调用（Kimi 与 MiMo）}
+
+两个 provider 的 \texttt{POST /chat/completions} 均返回 HTTP 200。首次实验使用
+\texttt{max\_tokens=150}，出现了一个值得记录的现象：由于 kimi-k3 与 mimo-v2.5-pro
+都是默认开启思考模式的推理模型，\texttt{max\_tokens} 预算被推理 token
+（reasoning tokens）大量占用，导致正文被截断，\texttt{finish\_reason} 为
+\texttt{length}。以 Kimi 为例（截断版响应）：
+
+\begin{verbatim}
+{"id":"chatcmpl-6a84574c699481545f155cb3",
+ "object":"chat.completion","model":"kimi-k3",
+ "choices":[{"index":0,"message":{
+   "role":"assistant","content":"",    <- 正文为空！
+   "reasoning_content":"The user is asking in
+     Chinese to introduce ..."},
+   "finish_reason":"length"}],
+ "usage":{"prompt_tokens":100,
+          "completion_tokens":150,
+          "total_tokens":250,
+          "completion_tokens_details":{
+            "reasoning_tokens":147}}}
+\end{verbatim}
+
+150 个 completion token 中有 147 个是推理 token，正文完全没有输出。
+将 \texttt{max\_tokens} 提高到 1000 后两个模型都返回完整正文
+（Kimi：``POST 是 HTTP 中用于向服务器提交数据的请求方法，而 JSON 是 POST
+请求体（body）中最常用的数据格式之一\ldots''；MiMo：``POST 方法负责向服务器
+提交数据，而 JSON 请求体是承载这些数据的常用格式——两者是'信封'与'信纸'的
+关系''）。真实运行窗口见图~\ref{fig:ch1_curl_kimi} 与
+图~\ref{fig:ch1_curl_mimo}，完整响应另见
+\texttt{evidence/ch1/02\_curl\_kimi\_full.txt} 与 \texttt{02\_curl\_mimo\_full.txt}。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{ch1_curl_kimi.png}
+\caption{实验 2：curl 调用 Kimi（kimi-k3）的真实运行窗口，返回完整响应与 usage。}
+\label{fig:ch1_curl_kimi}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{ch1_curl_mimo.png}
+\caption{实验 2：curl 调用小米 MiMo（mimo-v2.5-pro）的真实运行窗口。}
+\label{fig:ch1_curl_mimo}
+\end{figure}
+
+\subsubsection{实验 3 结果：Python 统一调用}
+
+同一问题（``用一句话解释 HTTP 的 POST 方法与 JSON 请求体的关系''）同时调用
+kimi-k3 与 mimo-v2.5-pro，结果见表~\ref{tab:ch1_unified}，完整输出见
+\nolinkurl{evidence/ch1/03_unified_call.txt}。
+
+\begin{table}[H]
+\centering
+\caption{统一调用结果对比（同一问题）}
+\label{tab:ch1_unified}
+\begin{tabular}{lcc}
+\toprule
+\textbf{指标} & \textbf{kimi-k3} & \textbf{mimo-v2.5-pro} \\
+\midrule
+总耗时 (s) & 14.12 & 5.15 \\
+响应字数 & 138 & 61 \\
+prompt\_tokens & 122 & 37 \\
+completion\_tokens & 280 & 130 \\
+total\_tokens & 402 & 167 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+两个模型都给出了准确回答。Kimi 的回答更详细（补充了
+\texttt{Content-Type: application/json} 的语义），MiMo 的回答更简洁；
+MiMo 的 prompt\_tokens 明显更少，与其 tokenizer 分词粒度及提示词缓存
+（cached\_tokens）有关。同一份代码只需切换 PROVIDERS 字典即可换平台，
+验证了 OpenAI-compatible 的低迁移成本。真实运行窗口见图~\ref{fig:ch1_unified}。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{ch1_unified.png}
+\caption{实验 3：统一调用脚本同时调用 kimi-k3 与 mimo-v2.5-pro 的真实运行窗口，含响应内容、usage 与对比摘要。}
+\label{fig:ch1_unified}
+\end{figure}
+
+\subsubsection{实验 4 结果：流式输出}
+
+以 kimi-k3 为例，一次流式调用共收到 375 个 chunk。前 160 余个 chunk 的
+\texttt{delta.content} 为 \texttt{None}（模型处于推理阶段），之后才逐字输出
+正文，最后以 \texttt{finish\_reason=stop} 结束，并通过空 choices 的 chunk
+携带 usage。关键 chunk 结构（节选）：
+
+\begin{verbatim}
+chunk delta.content=''        <- 首个 chunk（含 role）
+chunk delta.content=None      <- 推理阶段：约 160 个 chunk 无正文
+...（省略推理 chunk）...
+chunk delta.content='流'      <- 正文开始，逐 token 输出
+chunk delta.content='式'
+chunk delta.content='输出'
+...
+chunk finish_reason=stop      <- 结束
+[usage chunk] {'completion_tokens': 387,
+  'prompt_tokens': 119,
+  'completion_tokens_details':
+    {'reasoning_tokens': 294}}
+\end{verbatim}
+
+流式与普通输出的对比见表~\ref{tab:ch1_stream}。流式模式首字节延迟
+（TTFT）为 2.68 s，之后内容边生成边到达；普通模式需要等待完整响应
+（13.24 s）才能开始渲染。两者的最终内容与 token 用量一致。真实运行窗口
+见图~\ref{fig:ch1_stream_chunks}（推理阶段 chunk 与正文 chunk）与
+图~\ref{fig:ch1_stream_summary}（流式汇总与普通调用对照）。
+
+对 MiMo 的补充验证（\nolinkurl{test_mimo_stream_usage.py}，证据
+\nolinkurl{05c_mimo_stream_usage.txt}）表明：\texttt{mimo-v2.5-pro} 同样
+支持 \texttt{stream\_options}（设为 \texttt{include\_usage=True}）参数，
+流式末尾返回 usage chunk（45 个 chunk，prompt=265、completion=101，含
+\texttt{cached\_tokens=192}）。两个平台的流式 usage 均可获得，区别在于
+Kimi 的 usage 含 \texttt{reasoning\_tokens} 明细（推理 token 单独统计），
+MiMo 的 usage 结构与模型相关。
+
+\begin{table}[H]
+\centering
+\caption{流式输出与普通输出对比（kimi-k3）}
+\label{tab:ch1_stream}
+\begin{tabular}{lcc}
+\toprule
+\textbf{指标} & \textbf{流式 (stream=True)} & \textbf{普通} \\
+\midrule
+首字节延迟 TTFT (s) & 2.68 & 13.24（即总耗时） \\
+总耗时 (s) & 14.07 & 13.24 \\
+chunk 数 & 375 & 1 \\
+usage（prompt/completion/total） & 119/387/506 & 一致 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{ch1_stream1.png}
+\caption{实验 4：流式输出真实运行窗口——前段为推理阶段 chunk（正文为空），后段为正文逐字 chunk（结构见上文代码块）。}
+\label{fig:ch1_stream_chunks}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{ch1_stream3.png}
+\caption{实验 4：流式汇总（chunk 数、TTFT、usage）与普通调用对照的真实运行窗口。}
+\label{fig:ch1_stream_summary}
+\end{figure}
+
+\subsubsection{实验 5 结果：JSON 输出与校验}
+
+kimi-k3 在 \texttt{response\_format=\{"type":"json\_object"\}} 下输出合法的
+课程计划 JSON，\texttt{json.loads} 解析成功，四个字段（\texttt{title}、
+\texttt{tasks}、\texttt{deadline}、\texttt{risks}）全部通过结构校验，且
+\texttt{tasks}（5 项）与 \texttt{risks}（4 项）满足数量要求：
+
+\begin{verbatim}
+{
+  "title": "学生大模型 API 调用实战教程",
+  "tasks": [
+    "注册大模型平台账号并获取 API Key，完成环境变量配置",
+    "使用 Python 编写第一个 API 调用脚本，实现基础文本生成",
+    ...],
+  "deadline": "2025-06-30",
+  "risks": [
+    "API 调用超出免费额度产生意外费用",
+    "API Key 泄露导致账号被盗用", ...]
+}
+[json.loads] 解析成功
+[结构校验] 通过
+\end{verbatim}
+
+真实运行窗口见图~\ref{fig:ch1_json}。补充实验（\nolinkurl{test_mimo_json.py}，证据
+\nolinkurl{05b_mimo_json_behavior.txt}）表明：MiMo 在非流式 + json\_object、
+非流式 + 纯提示词约束、流式 + json\_object 三种方式下均可输出可解析 JSON，
+但在实验 7 的对比调用中偶发输出 \texttt{```json} Markdown 围栏（详见
+对比分析）。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{ch1_json.png}
+\caption{实验 5：JSON 输出与 \texttt{json.loads} 校验的真实运行窗口，校验与结构检查均通过。}
+\label{fig:ch1_json}
+\end{figure}
+
+\subsubsection{实验 6 结果：错误处理}
+
+四类故意触发的错误全部按预期返回，见表~\ref{tab:ch1_errors}。Kimi 的错误
+体遵循 OpenAI 风格（\texttt{error.message} 与 \texttt{error.type} 字段），
+base\_url 错误时返回的是平台自定义格式（\texttt{code:5}、
+\texttt{error:url.not\_found}）。
+
+\begin{table}[H]
+\centering
+\caption{错误处理实验结果（kimi-k3）}
+\label{tab:ch1_errors}
+\small
+\begin{tabular}{cllp{4.2cm}}
+\toprule
+\textbf{场景} & \textbf{异常类型} & \textbf{HTTP 状态码} & \textbf{服务端错误信息} \\
+\midrule
+错误 API key & AuthenticationError & 401 & Invalid Authentication \\
+错误模型名 & NotFoundError & 404 & Not found the model ... or Permission denied \\
+错误 base\_url & NotFoundError & 404 & code:5, url.not\_found \\
+请求体缺 messages & BadRequestError & 400 & Invalid request: messages must not be empty \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+排查要点：401 检查 key 是否有效/权限；400 检查请求体与 model 拼写；
+404 检查 base\_url 路径；429（限流）需要退避重试。真实运行窗口见图~\ref{fig:ch1_errors}。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{ch1_errors.png}
+\caption{实验 6：四类错误（401/404/404/400）的真实运行窗口，含异常类型与服务端错误信息。}
+\label{fig:ch1_errors}
+\end{figure}
+
+\subsubsection{实验 7 结果：模型对比}
+
+同一中文任务（JSON 格式学习计划）流式调用两个模型，结果见表~\ref{tab:ch1_compare}
+与图~\ref{fig:ch1_compare}（延迟柱状图）、图~\ref{fig:ch1_compare_terminal}
+（运行窗口对比摘要）。MiMo 的 TTFT 更短（0.90 s），但本次调用总耗时
+更长且 JSON 输出带 Markdown 围栏导致直接解析失败；Kimi 输出稳定。
+
+\begin{table}[H]
+\centering
+\caption{模型对比结果（同一中文任务，流式）}
+\label{tab:ch1_compare}
+\small
+\begin{tabular}{lcc}
+\toprule
+\textbf{指标} & \textbf{kimi-k3} & \textbf{mimo-v2.5-pro} \\
+\midrule
+TTFT (s) & 2.57 & 0.90 \\
+总耗时 (s) & 12.82 & 15.80 \\
+响应字数 & 362 & 405 \\
+JSON 直接可解析 & 是 & 否（输出 \texttt{```json} 围栏） \\
+上下文窗口 & 1,048,576（1M） & 1,048,576（1M，最大输出 128K） \\
+输出单价（每 1M tokens） & ¥100.00 & ¥6.00 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{ch1_model_compare.png}
+\caption{模型对比：同一中文任务（流式调用）的总耗时与首字节延迟。}
+\label{fig:ch1_compare}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{ch1_compare.png}
+\caption{实验 7：模型对比的真实运行窗口（对比摘要：总耗时、TTFT、响应字数、JSON 可解析）。}
+\label{fig:ch1_compare_terminal}
+\end{figure}
+
+\subsection{对比分析}
+
+\begin{enumerate}[leftmargin=4em,itemsep=0pt,topsep=2pt]
+    \item \textbf{响应质量}：两个模型均能准确回答中文技术问题。Kimi 回答更
+          详尽（会主动补充 \texttt{Content-Type} 等技术细节），MiMo 更简洁。
+          在 JSON 学习计划任务中两者输出内容质量相当（均覆盖步骤、常见错误
+          与建议三个要素）。
+    \item \textbf{格式遵循}：Kimi 在 json\_object 模式下输出稳定、无多余内容；
+          MiMo 偶发在 JSON 外加 \texttt{```json} Markdown 围栏（补充实验中
+          三种方式均可解析，说明是采样不稳定而非能力缺失）。工程建议：
+          解析前先剥离代码块围栏，或解析失败时重试一次。
+    \item \textbf{速度}：实验 3 中 MiMo 总耗时（4.78 s）明显快于 Kimi
+          （11.91 s）；实验 7 中两者总耗时接近（12.8 s vs 15.8 s），但 MiMo
+          TTFT（0.90 s）快于 Kimi（2.57 s）。推理模型的延迟受推理长度影响，
+          波动较大，单次测量只能作为量级参考。两个模型均为推理模型，
+          completion\_tokens 中推理 token 占比高（Kimi 可达 70\%+），调用
+          推理模型时 \texttt{max\_tokens} 必须预留推理空间。
+    \item \textbf{费用}：按官方定价（Kimi K3：输入 ¥20/M、缓存命中 ¥2/M、
+          输出 ¥100/M；MiMo v2.5-pro：输入 ¥3/M、缓存命中 ¥0.025/M、输出
+          ¥6/M，均以每 1M tokens 计），用各实验日志中的真实 usage 计算
+          （公式：费用 = prompt×输入单价/1e6 + completion×输出单价/1e6，
+          缓存未命中保守口径），汇总见表~\ref{tab:ch1_cost}。第 1 章全部
+          API 调用总费用约 ¥0.169 元（kimi ≈ ¥0.165、mimo ≈ ¥0.004），
+          远低于 0.5 元。需要指出的是：推理模型的推理 token 计入
+          completion\_tokens 一并计费（Kimi 的 reasoning 占比高，是费用
+          较高的主因）；MiMo 的提示词缓存（cached\_tokens）可进一步降低
+          重复调用成本。单价与 usage 明细见 \nolinkurl{evidence/ch1/08_cost_summary.txt}。
+
+\begin{table}[H]
+\centering
+\caption{第 1 章 API 调用费用汇总（官方单价 × 真实 usage，2026-08-18）}
+\label{tab:ch1_cost}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lrrr}
+\toprule
+\textbf{实验/调用} & \textbf{prompt} & \textbf{completion} & \textbf{费用（元）} \\
+\midrule
+实验 2 curl Kimi（完整） & 100 & 393 & 0.0413 \\
+实验 2 curl Kimi（截断） & 100 & 150 & 0.0170 \\
+实验 2 curl MiMo（完整） & 264 & 84 & 0.0013 \\
+实验 2 curl MiMo（截断） & 264 & 150 & 0.0017 \\
+实验 3 统一调用 kimi & 122 & 380 & 0.0404 \\
+实验 3 统一调用 mimo & 37 & 99 & 0.0007 \\
+实验 4 流式（kimi） & 119 & 329 & 0.0353 \\
+实验 5 JSON（kimi） & 247 & 264 & 0.0313 \\
+\midrule
+kimi-k3 合计 & & & ≈ 0.1654 \\
+mimo-v2.5-pro 合计 & & & ≈ 0.0037 \\
+\textbf{总计} & & & \textbf{≈ 0.1691} \\
+\bottomrule
+\end{tabular}
+
+\par\vspace{3pt}
+\begin{center}
+{\footnotesize 注：费用按缓存未命中保守口径估算（公式见对比分析第 4 条）。
+其中 3 次调用在日志中检出上下文缓存命中（curl Kimi 完整 cached\_tokens=100、
+curl MiMo 完整 256、curl MiMo 截断 192），若这三行改按缓存单价核算，
+全章总费用约 ¥0.166（比保守口径低约 ¥0.003）。明细见
+\nolinkurl{evidence/ch1/08_cost_summary.txt}。}
+\end{center}
+\end{table}
+
+    \item \textbf{上下文长度}：两模型上下文窗口均为 1M
+          （1,048,576 tokens；MiMo 最大输出 131,072），长文本/整库检索场景
+          均无需分块。差异在于：Kimi 始终推理且输出单价高，长上下文大输出
+          场景成本显著高于 MiMo；MiMo 输出上限（128K）低于 Kimi 的完整
+          1M 输出空间（Kimi 输出上限以官方文档为准），超长生成任务需注意。
+    \item \textbf{限流与错误恢复}：Kimi 的错误体为标准 OpenAI 格式，易于
+          程序化解析；MiMo 未实测 429（本章未触发限流）。两个平台均返回
+          HTTP 状态码，配合 OpenAI SDK 的异常类型（AuthenticationError /
+          NotFoundError / BadRequestError）可直接定位问题。
+    \item \textbf{文档易用性}：Kimi（platform.moonshot.cn）与小米 MiMo
+          （mimo.mi.com）均提供 OpenAI-compatible 快速开始文档；MiMo 文档
+          明确标注思考模式下 temperature/top\_p 无效，Kimi 需要从文档中
+          确认 kimi-k3 的推理特性。整体上两者的接入成本相近，均只需
+          base\_url + key + model 三项配置。
+\end{enumerate}
+
+\subsection{可复现教程}
+
+本章实验的全部脚本位于 \texttt{code/ch1-api/}，复现步骤为：
+
+\begin{enumerate}[leftmargin=4em,itemsep=0pt,topsep=2pt]
+    \item 复制 \texttt{.env.example} 为 \texttt{.env}，填入至少两个平台的 API key；
+    \item 使用 Miniconda ML-base 环境（Python 3.11.15），按
+          \texttt{requirements.txt} 安装依赖（\texttt{pip install -r}
+          \texttt{ requirements.txt}）；
+    \item 依次运行：\texttt{unified\_call.py kimi mimo}、
+          \texttt{stream\_call.py kimi}、\texttt{json\_output.py kimi}、
+          \texttt{error\_cases.py kimi}、\texttt{compare\_models.py kimi mimo}；
+    \item 每个脚本自动把真实输出写入 \texttt{evidence/ch1/}（UTF-8 日志）。
+\end{enumerate}
+
+\begin{thebibliography}{9}
+
+\bibitem{kimi-doc}
+Moonshot AI. Kimi API 快速开始[EB/OL].
+\url{https://platform.moonshot.cn/docs/guide/start-using-kimi-api}，
+访问日期 2026-08-17.
+
+\bibitem{qwen-doc}
+阿里云. 阿里云百炼首次调用千问 API[EB/OL].
+\url{https://help.aliyun.com/zh/model-studio/getting-started/first-api-call-to-qwen}，
+访问日期 2026-08-17.
+
+\bibitem{ark-doc}
+火山引擎. 火山方舟快速入门[EB/OL].
+\url{https://www.volcengine.com/docs/82379/1298454}，
+访问日期 2026-08-17.
+
+\bibitem{mimo-doc}
+小米. Xiaomi MiMo API 开放平台——首次调用[EB/OL].
+\url{https://mimo.mi.com/docs/zh-CN/quick-start/summary/first-api-call}，
+访问日期 2026-08-18.
+
+\bibitem{mdn-http}
+MDN. Overview of HTTP[EB/OL].
+\url{https://developer.mozilla.org/en-US/docs/Web/HTTP/Overview}，
+访问日期 2026-08-17.
+
+\bibitem{rfc8259}
+Bray T. The JavaScript Object Notation (JSON) Data Interchange Format:
+RFC 8259[S]. IETF, 2017.
+\url{https://datatracker.ietf.org/doc/html/rfc8259}，
+访问日期 2026-08-17.
+
+\bibitem{curl-doc}
+curl. curl official site[EB/OL].
+\url{https://curl.se/}，访问日期 2026-08-17.
+
+\bibitem{openai-sdk}
+OpenAI. OpenAI Python API library[EB/OL].
+\url{https://github.com/openai/openai-python}，访问日期 2026-08-17.
+
+\end{thebibliography}

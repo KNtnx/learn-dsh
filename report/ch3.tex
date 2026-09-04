@@ -1,0 +1,213 @@
+% ============================================================
+%  第三章：Pi-core 源码与工具调用分析
+% ============================================================
+\clearpage
+\section{第三章：Pi-core 源码与工具调用分析}
+
+\subsection{背景}
+
+源码分析的目标不是通读每一行，而是抓住 agent harness 的关键链路：模型怎样
+收到工具 schema、怎样输出 tool call、运行时怎样校验和执行、工具结果怎样
+进入会话历史、循环怎样决定继续或停止。本章选择 Pi 作为分析对象——它是较
+适合教学的 agent harness 例子：仓库目录为 \texttt{packages/agent}，包名为
+\texttt{@earendil-works/pi-agent-core}（v0.84.2，commit
+\texttt{59a71b2}），其 \texttt{agent-loop.ts} 可以直接看到工具调用的执行
+路径。
+
+\begin{verbatim}
+仓库：https://github.com/earendil-works/pi
+commit：59a71b2（2026-08-18 克隆）
+包：@earendil-works/pi-agent-core 0.84.2
+\end{verbatim}
+
+\subsection{关键文件与职责}
+
+\begin{table}[H]
+\centering
+\caption{Pi 工具调用链路关键文件（≥8 个）}
+\label{tab:pi_files}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{p{5.6cm}p{8cm}}
+\toprule
+\textbf{文件路径} & \textbf{在工具调用链路中的职责} \\
+\midrule
+\nolinkurl{packages/agent/package.json} & 包名 \texttt{@earendil-works/pi-agent-core}、依赖与定位 \\
+\nolinkurl{packages/agent/src/types.ts} & \texttt{AgentLoopConfig}、\texttt{AgentToolCall}、\texttt{AgentToolResult}、before/after hook、executionMode \\
+\nolinkurl{packages/agent/src/agent-loop.ts} & 主循环：流式响应、提取 toolCall、串/并行执行、toolResult 入上下文 \\
+\nolinkurl{packages/ai/src/types.ts} & 底层 \texttt{Message} 等消息类型 \\
+\nolinkurl{packages/ai/src/api/*} & 不同 provider 把统一消息转换为 OpenAI/Anthropic/Google/Mistral 协议 \\
+\nolinkurl{packages/coding-agent/src/core/tools/*} & 内置 read/write/edit/bash/grep/find/ls 工具定义与执行 \\
+\nolinkurl{.../tools/tool-definition-wrapper.ts} & \texttt{ToolDefinition} 与 \texttt{AgentTool} 的包装关系 \\
+\nolinkurl{.../core/extensions/wrapper.ts} & 扩展工具包装进 AgentTool，工具名反馈给运行时 \\
+\nolinkurl{.../core/agent-session.ts} & 工具注册表、启用、系统提示重建、tool event 映射到会话 UI \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{工具调用链路与时序}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{ch3_pi_timing.png}
+\caption{Pi 工具调用链路时序图：模型请求→工具调用→工具结果→下一轮请求（依据 agent-loop.ts 源码绘制）。}
+\label{fig:pi_timing}
+\end{figure}
+
+\subsubsection{主链路（源码确认，agent-loop.ts）}
+
+\begin{verbatim}
+user message
+ -> runAgentLoop / runLoop（155 行）
+ -> streamAssistantResponse（304 行）
+ -> assistant message 的 content 中过滤 type == "toolCall"
+ -> stopReason == "length" ?
+      是：failToolCallsFromTruncatedMessage（390 行）[截断保护]
+      否：executeToolCalls（420 行）
+         检测 executionMode == "sequential"（工具可自声明）
+         串行 executeToolCallsSequential（442 行）
+         或并行 executeToolCallsParallel（498 行）
+ -> 每个 toolCall：
+    prepareToolCall（609 行）
+      工具不存在 -> "Tool xxx not found" 错误结果
+      prepareArguments（工具可预处理参数）
+      validateToolArguments（参数校验）
+      beforeToolCall hook：可 block（reason + terminate）
+    executePreparedToolCall（679 行）
+      执行 tool.execute(id, args, signal, partialUpdate)
+      异常 -> createErrorToolResult
+    finalizeExecutedToolCall（722 行）
+      afterToolCall hook 可替换结果
+ -> createToolResultMessage（786 行）
+    -> append 到 currentContext.messages
+ -> 下一轮 LLM 请求看到 tool result
+ -> stopReason == "stop" / shouldStopAfterTurn 时退出
+\end{verbatim}
+
+\subsubsection{关键函数解释（≥3 个）}
+
+\begin{enumerate}[leftmargin=4em,itemsep=0pt,topsep=2pt]
+    \item \textbf{\texttt{runLoop}(agent-loop.ts:155)}：双层循环。外层持续轮询
+          steering 消息（用户排队输入）；内层在 ``还有工具调用或待处理消息''
+          时持续：流式请求模型 → 提取 toolCall → 执行工具批 → 结果追加进
+          \texttt{currentContext.messages} → 再请求模型，直到没有新的工具调用
+          或 stopReason 为 stop/error/aborted。工具结果不经过任何中间存储，
+          直接写入上下文供下一轮请求使用。
+    \item \textbf{\texttt{prepareToolCall}(agent-loop.ts:609)}：工具执行的
+          前置关卡。按名字查注册表（未知工具立即返回错误结果）；调用
+          \texttt{prepareArguments}（工具可规范化参数）；调用
+          \texttt{validateToolArguments} 做 schema 校验；再执行
+          \texttt{config.beforeToolCall} hook——hook 返回 \texttt{block} 时可
+          以拒绝执行并附带 reason，\texttt{terminate} 时整批终止。任何异常
+          都被捕获转为错误结果（不中断循环）。
+    \item \textbf{\texttt{executeToolCalls}(agent-loop.ts:420)}：调度器。若
+          配置要求串行、或任一被调用工具声明
+          \texttt{executionMode === "sequential"}，则整批串行；否则并行执行。
+          每个工具的执行通过 \texttt{executePreparedToolCall} 完成——携带
+          AbortSignal 支持取消，并支持通过 \texttt{partialResult} 回调流式
+          上报执行进度。
+    \item \textbf{\texttt{AgentLoopConfig}(types.ts:149)}：循环配置中枢。
+          \texttt{convertToLlm}（AgentMessage→LLM 消息，必填）、
+          \texttt{transformContext}（上下文裁剪/外部注入钩子）、
+          \texttt{getApiKey}（动态取 key，支持短时 OAuth token）、
+          \texttt{shouldStopAfterTurn}（优雅停止条件）。
+\end{enumerate}
+
+\subsection{错误路径（≥4 条，均有源码依据）}
+
+\begin{enumerate}[leftmargin=4em,itemsep=0pt,topsep=2pt]
+    \item \textbf{未知工具}：\texttt{prepareToolCall} 中注册表找不到工具 →
+          ``Tool xxx not found'' 错误结果，\texttt{isError: true}（618--622 行）。
+    \item \textbf{参数校验失败}：\texttt{validateToolArguments} 抛错 → 被
+          catch 转为 \texttt{createErrorToolResult}（627、670--675 行）。
+    \item \textbf{工具执行抛异常}：\texttt{executePreparedToolCall} 的 catch
+          分支把异常信息包装为错误结果（710--715 行）。
+    \item \textbf{输出 token 截断}：\texttt{stopReason} 为 \texttt{"length"}
+          时拒绝执行\textbf{全部}工具调用，提示 ``arguments may be
+          truncated, re-issue''（390--415 行，函数
+          \texttt{failToolCalls-}\allowbreak\texttt{FromTruncatedMessage}）——
+          宁可报错重来，也不执行可能残缺的参数。
+    \item \textbf{取消/中止}：\texttt{signal.aborted} 时返回
+          ``Operation aborted''；串行循环中中止会中断剩余调用（638--663、487--489 行）。
+    \item \textbf{策略拦截}：\texttt{beforeToolCall} 返回
+          \texttt{block: true} 时拒绝执行，\texttt{terminate} 级联终止整批
+          （645--655 行）。
+\end{enumerate}
+
+\subsection{设计评价（≥2 个）}
+
+\begin{enumerate}[leftmargin=4em,itemsep=0pt,topsep=2pt]
+    \item \textbf{截断保护设计}：对 ``length'' 停止的消息不执行任何工具调用。
+          这是容易被忽略的健壮性细节——模型输出被 token 上限截断时，工具
+          参数可能不完整，执行会浪费配额甚至产生错误副作用；Pi 选择把整批
+          工具调用标记为错误并要求模型重发。
+    \item \textbf{hook 分层（before/afterToolCall）}：执行前拦截
+          （权限/策略/审计）与执行后替换（结果加工）分离，且 \texttt{block}
+          支持 \texttt{terminate} 级联——权限拒绝可以干净地终止整个工具批，
+          而不是让后续工具继续执行。
+    \item \textbf{串行/并行自动选择}：工具可自声明
+          \texttt{executionMode: "sequential"}（如编辑类工具需要顺序），
+          运行时按``任一工具要求串行则整批串行''的规则调度，兼顾正确性与
+          吞吐。
+    \item \textbf{上下文钩子分离}：\texttt{transformContext}（上下文窗口
+          裁剪、外部注入）与 \texttt{convertToLlm}（消息协议转换）职责分开，
+          上下文管理不需要关心 provider 差异。
+\end{enumerate}
+
+\subsection{与 DSH 的横向比较}
+
+本章同时对照了 DSH（DeepSeek Harness，见第 4 章）的实现（
+\nolinkurl{packages/core/tools/src/index.ts}、
+\nolinkurl{agent-loop/src/agent.ts} 与 \nolinkurl{tool-calls.ts}，
+基于官方文档与本地安装源码）。
+
+\begin{table}[H]
+\centering
+\caption{Pi 与 DSH 工具调用链路对比}
+\label{tab:pi_dsh}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{p{2.6cm}p{5.7cm}p{5.7cm}}
+\toprule
+\textbf{维度} & \textbf{Pi（pi-agent-core）} & \textbf{DSH} \\
+\midrule
+插件模型 & extensions 扩展 + 工具注册表 & Everything is a plugin（Cordis 插件行） \\
+工具注册 & \texttt{AgentTool}（execute 手写，schema 由 typebox 定义） & \texttt{ctx.tools.register}（\texttt{defineTool} 编译
+schema 并自动校验参数） \\
+执行管道 & before/afterToolCall hook & \texttt{tools/pre-execute}、\texttt{tools/execute}、\texttt{tools/post-execute}、\texttt{tools/result} 事件管道 \\
+配置方式 & \texttt{AgentLoopConfig}（代码内对象） & cordis.yml patch 分层（profile/bundle/patch） \\
+上下文钩子 & transformContext / convertToLlm & 上下文组装进系统提示词，会话日志持久化 \\
+截断保护 & stopReason=length 拒绝整批工具 & （第 4 章插件开发中由 exec.signal 与 schema 校验覆盖） \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+两种实现都遵循``模型输出工具调用 → 校验 → 执行 → 结果回写上下文 → 下一轮''
+的统一范式。差异在于工程组织：Pi 把调度逻辑集中在 agent-loop.ts 内联函数，
+hook 少而清晰；DSH 把管道拆成可插拔事件（pre/execute/post/result），并借助
+Cordis 让工具、策略、UI 都可独立挂载——这对应了从单机工具链到插件化运行时
+的架构演化（与第 2 章 harness engineering 的概念呼应）。
+
+\begin{thebibliography}{9}
+
+\bibitem{pi-repo}
+earendil-works. Pi GitHub 仓库（monorepo）[EB/OL].
+\url{https://github.com/earendil-works/pi}，访问日期 2026-08-18.
+
+\bibitem{pi-agent-pkg}
+earendil-works. pi-agent-core package.json[EB/OL].
+\url{https://github.com/earendil-works/pi/blob/main/packages/agent/package.json}，访问日期 2026-08-18.
+
+\bibitem{pi-agent-loop}
+earendil-works. packages/agent/src/agent-loop.ts[EB/OL].
+\url{https://github.com/earendil-works/pi/blob/main/packages/agent/src/agent-loop.ts}，访问日期 2026-08-18.
+
+\bibitem{pi-agent-types}
+earendil-works. packages/agent/src/types.ts[EB/OL].
+\url{https://github.com/earendil-works/pi/blob/main/packages/agent/src/types.ts}，访问日期 2026-08-18.
+
+\bibitem{dsh-docs}
+DeepSeek. DSH Architecture 与 Tool execution pipeline[EB/OL].
+\url{https://github.com/deepseek-ai/DeepSeek-Harness/blob/master/docs/architecture.md}，访问日期 2026-08-18.
+
+\end{thebibliography}

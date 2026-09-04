@@ -1,0 +1,19 @@
+========================================================================
+实验 5 补充：MiMo JSON 输出行为验证（三种方式对比）
+运行时间：2026-08-18T21:04:15
+证据文件：E:\game\2026下半年暑假实训\evidence\ch1\05b_mimo_json_behavior.txt
+========================================================================
+
+[A] 非流式 + response_format=json_object
+    可解析: True  
+    内容前 150 字符: '{"steps":["第1步：理解API的基本概念，学习HTTP请求方法（GET/POST）和响应格式（JSON），使用Postman等工具发送第一个测试请求","第2步：选择一个简单的公开API（如天气API或学生信息API），用Python的requests库编写代码实现数据获取和解析","第3'
+
+[B] 非流式 + 仅提示词约束（无 response_format）
+    可解析: True  
+    内容前 150 字符: '{\n  "steps": [\n    "Step 1: Understand API fundamentals, such as what APIs are, their common types (e.g., RESTful APIs), and key concepts like endpoin'
+
+[C] 流式 + response_format=json_object
+    可解析: True  
+    内容前 150 字符: '{"steps":["第一步：学习HTTP请求基础，理解GET/POST方法、URL、Headers和请求参数的含义，使用Postman或curl工具发送第一个测试请求","第二步：解析API返回数据，掌握JSON格式的阅读和提取方法，学会处理状态码（如200成功、404未找到），用代码实现自动请求'
+
+[结论] 记录 MiMo 在不同方式下的 JSON 格式遵循表现，供报告对比分析。

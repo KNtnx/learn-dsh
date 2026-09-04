@@ -1,0 +1,181 @@
+% ============================================================
+%  第五章（选作）：用 DSH 实现个人 Alpha —— 项目学习报告助手
+%  （dsh-learning-report）
+% ============================================================
+\clearpage
+\section{第五章（选作）：用 DSH 实现个人 Alpha —— 项目学习报告助手}
+
+\subsection{背景：问题定义}
+
+\textbf{一句话问题定义}：学习或接手一个陌生项目时，需要回答``它是什么、
+怎么搭、怎么跑''——依赖清单、文档入口、目录结构、git 状态、构建命令，
+人工要逐文件探测、逐个命令试跑，费时且容易漏。本 Alpha 把它做成一个
+DSH 插件（\nolinkurl{code/ch5-alpha/dsh-plugins/} 仓库中的
+\texttt{dsh-learning-report}）：用户一句话（``分析这个项目，写技术报告
+和复现方案''），模型按插件分发的 skill 工作流自动完成——一次收集结构化
+项目快照，产出 \texttt{TECHNICAL\_REPORT.md}（技术报告）与
+\texttt{REPRODUCTION.md}（复现方案），全部落盘为文件。
+
+插件已安装进\textbf{Windows 11 本机 DSH 的 desktop profile}
+（\texttt{DSH\_HOME=C:\textbackslash Users\textbackslash KNtnx\textbackslash .dsh}）。
+
+\subsection{实验目标}
+
+\begin{enumerate}[leftmargin=4em,itemsep=0pt,topsep=2pt]
+    \item 以 bundle 形式把插件装入本机 desktop profile，并验证
+          \textbf{真实启动加载}（终端打印插件已加载）；
+    \item 梳理插件的工具/skill 结构与数据来源（文件系统与 git），
+          画出最小架构；
+    \item 落实安全边界：只读收集、输出目录限定、敏感文件不读内容、
+          人工确认；
+    \item 记录一次真实输入输出（运行证据，见 5.4）。
+\end{enumerate}
+
+\subsection{步骤与环境}
+
+环境：Windows 11（DSH\_HOME \texttt{C:\textbackslash Users\textbackslash KNtnx\textbackslash .dsh}，
+desktop profile 为 web-app 形态）；DSH 0.1.0-rc.6（npm 全局）；插件
+$@$0.1.0（本地 bundle）。插件仓库
+\nolinkurl{code/ch5-alpha/dsh-plugins/}（pnpm workspaces；本 Alpha
+采用项目报告插件 \texttt{dsh-learning-report}，其余包不在本 Alpha
+范围）。安装方式与第 4 章相同（官方 bundle 流程：
+\texttt{dsh plugin --profile desktop add <包 tgz>}），插件包内含
+\texttt{src/learning-report.ts}（\texttt{collect\_project\_context}）、
+\texttt{skills/learning-report/}（项目报告五阶段工作流）与
+\texttt{lib/}、\texttt{cordis.patch.yml}。\textbf{真实加载证据}见图~\ref{fig:ch5_loaded}
+（首次以默认端口启动时 \texttt{EADDRINUSE: 3080}，按提示改用
+\texttt{--port 3081} 后加载成功——排错过程一并保留展示）：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{ch5_plugin_loaded.jpg}
+\caption{desktop profile 真实启动：\texttt{dsh --profile desktop
+--port 3081} 后终端打印 \texttt{[project-learning-report] 插件已加载！}
+（上方为端口占用排错记录；图中另有一行插件加载输出已按本章范围遮盖）。}
+\label{fig:ch5_loaded}
+\end{figure}
+
+\subsection{结果：真实运行证据}
+
+对真实项目 \textbf{HighWayFlow}（强化学习高速赛车 Gymnasium 环境项目，
+位于 \texttt{E:\textbackslash game\textbackslash learn-llm}）执行一次
+``写技术报告和复现方案''（图~\ref{fig:ch5_session}）：会话中加载
+\texttt{project-learning-report} skill，
+\texttt{collect\_project\_context} 首次调用完成结构化快照收集，
+随后模型按工作流补读关键文件并落盘两份报告——会话统计共
+\textbf{18 次工具调用}（1 次 \texttt{collect\_project\_context} +
+补读/写盘等内置工具调用），随后汇报交付文件：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{ch5_session_result.jpg}
+\caption{运行结果（desktop 会话）：\texttt{project-learning-report
+分析 HighWayFlow 项目}——会话共 18 次工具调用，输出目录
+\texttt{E:\textbackslash game\textbackslash learn-llm\textbackslash
+learning-highwayflow}，交付 \texttt{TECHNICAL\_REPORT.md}（328 行）与
+\texttt{REPRODUCTION.md}（156 行），并给出技术报告与复现方案要点摘要。}
+\label{fig:ch5_session}
+\end{figure}
+
+\subsubsection{交付文件 1：TECHNICAL\_REPORT.md}
+
+按 SKILL 固定结构成文（项目概述/技术栈与依赖/目录结构/核心代码分析/
+Git 状态/构建与运行），图~\ref{fig:ch5_tech} 为其中依赖与目录结构段
+（依赖清单精确到版本与用途，目录树带中文批注——例如
+\texttt{highwayflow/envs/vehicle/} 下 \texttt{kinematics.py}（车辆运动学）
+与 \texttt{controller.py}（纵向/横向 PID 控制器））：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{ch5_report_technical.jpg}
+\caption{TECHNICAL\_REPORT.md（编辑器打开）：第 3 段 依赖与工具（gymnasium
+0.31.0、numpy、pandas 等；testing/style 工具表；uv 作为包管理器）与
+第 4 段 目录结构（带中文模块批注）——高亮行为截图中的表格例。}
+\label{fig:ch5_tech}
+\end{figure}
+
+\subsubsection{交付文件 2：REPRODUCTION.md}
+
+按 SKILL 固定结构成文（环境要求/依赖安装/复现步骤/预期结果/验证清单），
+图~\ref{fig:ch5_repro} 为第 4 段复现结果与第 5 段验证清单（42 个测试 12.3s 全部
+通过；验证清单逐项给出验证方法——如
+\texttt{python -c "import highway\_env"} 预期输出 \texttt{1.22.1}——
+与预期结果列一一对应）：
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{ch5_report_reproduction.jpg}
+\caption{REPRODUCTION.md（编辑器打开）：第 4 段 复现结果（42 tests passed
+in 12.3s、环境可视化、DQN 训练曲线）与第 5 段 验证清单（检查项/验证方法/
+预期结果三列）。}
+\label{fig:ch5_repro}
+\end{figure}
+
+至此完成``一句话 → 结构化快照 → 技术报告 + 复现方案''的完整闭环：
+\texttt{collect\_project\_context} 一次调用拿到
+manifest/README/AGENTS.md/文件清单/git 状态（省 token），模型仅补读
+少数关键文件；两份报告全部落盘为文件（不在对话里贴长文）。
+
+\subsection{分析与反思}
+
+\textbf{最小架构}见图~\ref{fig:ch5_arch}（按已安装 bundle 的
+\texttt{cordis.patch.yml}、工具声明与 SKILL.md 绘制）：用户一句话 →
+skill 工作流阶段化驱动（阶段 1--5）→ 插件工具
+\texttt{collect\_project\_context}（一次拿到结构化快照，省 token）与
+宿主内置工具（read/write/grep/bash 补读与落盘）→ 数据/产物两路：
+项目仓库（清单/文档/源码/git）$\Rightarrow$ 产物
+\texttt{learning-<项目>/} 下两个 Markdown。skill 层负责``怎么编排''，
+工具层负责``能做什么''，分离使工具可被其它工作流复用。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{ch5_arch.png}
+\caption{个人 Alpha 最小架构：用户/会话、skill 工作流、插件工具与
+数据/产物四层；\texttt{collect\_project\_context} 与
+\texttt{project-learning-report} 均来自已安装的 bundle。}
+\label{fig:ch5_arch}
+\end{figure}
+
+\textbf{为什么适合用 DSH/插件化实现}：``一次收集 + 组织 + 落盘''是
+\textbf{多工具、可组合、带权限边界}的职责——DSH 插件模型统一了参数校验
+（\texttt{defineTool}）、输出 schema（供程序消费）与权限边界；skill
+把收集-写作流程固化为不可变的会话行为，避免每次重复交代；bundle 可被
+任意 profile 复用（已验证 desktop 形态加载）。
+
+\textbf{安全边界}：
+\begin{enumerate}[leftmargin=4em,itemsep=0pt,topsep=2pt]
+    \item \textbf{只读收集}：\texttt{collect\_project\_context} 只读
+          项目清单/文档/文件列表/git 状态（git 命令为只读形态），
+          写操作限定在产物目录 \texttt{learning-<项目>/}；
+    \item \textbf{敏感文件}：不读取 \texttt{.env} 等凭据文件（快照只含
+          清单与文件名，不含文件内容密钥）；产物不含 API key；
+    \item \textbf{不覆盖}：输出目录已存在时不覆盖已有报告，文件冲突
+          采用追加或另命名（SKILL 规定）；\texttt{collect\_project\_context}
+          返回的清单用于快照而非逐份粘贴全文（省 token 且保证
+          上下文可控）；
+    \item \textbf{人工确认}：报告/复现方案为模型生成的一手产出，
+          交付前提示用户核对关键命令与预期结果。
+\end{enumerate}
+
+\textbf{局限性}与下一步：
+\begin{enumerate}[leftmargin=4em,itemsep=0pt,topsep=2pt]
+    \item 快照质量依赖源项目结构：manifest 识别覆盖 package.json、
+          pyproject.toml、Cargo.toml、go.mod、requirements.txt，
+          老式或混合项目可能识别不全；
+    \item \texttt{git} 依赖本机 CLI（与第 4 章相同的环境前置）；
+    \item 下一步：接入 DSH \texttt{tools/pre-execute} 做产出前检查；
+          支持批量/定时学习任务；报告模板参数化。
+\end{enumerate}
+
+\begin{thebibliography}{9}
+
+\bibitem{dsh-plugins-ch5}
+本项目. dsh-plugins——个人插件仓库（项目学习报告插件）[EB/OL].
+\nolinkurl{code/ch5-alpha/dsh-plugins/}，访问日期 2026-08-31.
+
+\bibitem{dsh-skill-ch5}
+DeepSeek. DSH 技能（skills）与插件开发文档[EB/OL].
+\url{https://github.com/deepseek-ai/DeepSeek-Harness/tree/master/docs}，
+访问日期 2026-08-31.
+
+\end{thebibliography}

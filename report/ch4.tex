@@ -1,0 +1,516 @@
+% ============================================================
+%  第四章：DeepSeek Harness 融入具体应用
+% ============================================================
+\clearpage
+\section{第四章：DeepSeek Harness 融入具体应用}
+
+\subsection{背景}
+
+DeepSeek Harness（dsh）是 DeepSeek 官方开源的 agent harness，目前处于
+developer preview 阶段（本章实际使用两个版本形态：早期以
+\texttt{npx @deepseek-ai/dsh@0.1.0-rc.6} 验证（解析安装为 0.1.0-rc.7），
+后续以\textbf{源码编译方式}运行官方发布版本 \texttt{0.1.2-alpha.1}
+（commit \texttt{cd5ef81}），两个形态的差异见 4.2 版本对照）。
+它的核心设计是 ``Everything is a plugin''：模型、工具、skills、
+sessions、sandboxes、storage、loops、scheduling 和 UI 都由插件组合。
+它基于 Cordis 运行时，插件通过 \texttt{apply(ctx)} 向上下文注册能力，
+通过 profile、bundle 和 patch 组合出不同运行时。
+
+本章的目标是把 DSH 放进真实研发流程：在本机 WSL2 上以\textbf{源码编译}、
+\textbf{从源码启动}的方式搭建 DSH 运行环境（与任务书建议的
+``git clone + pnpm install + pnpm dsh web'' 流程一致），研读官方插件
+教程并\textbf{实际完成}（\texttt{scratch-plugin} + \texttt{cordis.yml}
+overlay + 终端输出；注册 \texttt{greet} 工具并在 Web UI 会话中被模型
+真实调用），再对照官方 minimal shape 开发业务工具插件
+（\texttt{dev\_environment\_snapshot} 巡检工具与 LaTeX 报告脚手架
+生成器），最后验证远程访问安全方案。
+
+\subsection{环境}
+
+本章以 \textbf{WSL2 源码编译方式}为主环境（与任务书建议一致：远端
+Linux + git clone + pnpm 构建），同时保留早期 \texttt{npx} 方式的验证
+记录，两套形态对照见表~\ref{tab:ch4_env}。
+
+\begin{table}[H]
+\centering
+\caption{第 4 章实验环境（源码方式为主 + npx 方式对照）}
+\label{tab:ch4_env}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lp{9cm}}
+\toprule
+\textbf{项目} & \textbf{版本/配置} \\
+\midrule
+操作系统 & Windows 11 专业版（build 26200 / 25H2）；WSL2 Ubuntu 24.04 LTS \\
+Node.js & v24.18.0（Windows）/ v22.22.3（WSL；满足 \texttt{\^{}22.19.0 || >=24.0.0}） \\
+pnpm & 11.22.0（WSL，源码方式使用） \\
+DSH 源码（主） & \texttt{git clone github.com/deepseek-ai/DeepSeek-Harness} \\
+　　运行版本 & \textbf{release 0.1.2-alpha.1}（commit \texttt{cd5ef81}） \\
+　　启动方式 & \texttt{pnpm dsh web --patch ./scratch-plugin/cordis.yml} \\
+DSH（npx 方式，对照） & \texttt{@deepseek-ai/dsh@0.1.0-rc.6}（解析安装 0.1.0-rc.7，组件 0.1.0-rc.8） \\
+@deepseek-ai/dsh-tools & 0.1.0-rc.6（npx 形态）/ 源码仓库同源 \\
+@deepseek-ai/cordis & 4.0.1 \\
+模型 & DeepSeek-V4 Flash（Web UI Settings $\rightarrow$ Models 配置；凭据走 DSH credentials 服务，仓库与报告无明文 key） \\
+远端子目录 & \nolinkurl{~/game/agent-lab/}（projects、secrets.env、deepseek-harness） \\
+运行日期 & 2026-08-18（npx 早期验证）；2026-08-30（源码方式完成官方教程） \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{verbatim}
+# 源码编译（本机 WSL2，主环境，与任务书"源码方式"一致）：
+git clone github.com/deepseek-ai/DeepSeek-Harness.git
+cd deepseek-harness && pnpm install && pnpm dsh web
+# 本章实际运行的官方教程命令：
+pnpm dsh web --patch ./scratch-plugin/cordis.yml
+# npx 早期验证（对照形态）：
+dsh --version   # -> rc.6（npx 实际安装 rc.7）
+dsh --help      # --profile / --patch / --dump-config
+\end{verbatim}
+
+\subsection{官方教程复现}
+
+本章以 DSH 官方开发文档为主教程（GitHub \nolinkurl{deepseek-ai/DeepSeek-Harness}
+的 \texttt{docs/user/develop/basic/} 目录，访问日期 2026-08-18），按
+``Your first plugin'' 与 ``Build a tool'' 的顺序研读并\textbf{在 WSL2
+源码编译环境中实际完成}：插件源码与 \texttt{cordis.yml} 见
+\nolinkurl{code/ch4-dsh/follow-official/scratch-plugin/}（与 WSL 中
+\texttt{~/game/agent-lab/deepseek-harness/scratch-plugin/} 一致），
+运行命令与终端输出见 4.3.1，Web UI 会话中的工具调用见 4.3.2。
+任务书必做实验完成情况对照见表~\ref{tab:ch4_mustdo}。
+
+\begin{table}[H]
+\centering
+\caption{第 4 章任务书必做实验 1--5 完成情况对照}
+\label{tab:ch4_mustdo}
+\small
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{p{2.6cm}p{1.6cm}p{6.9cm}}
+\toprule
+\textbf{必做实验} & \textbf{状态} & \textbf{证据} \\
+\midrule
+1. 跟做 Your first plugin（终端输出） & 已完成 & 4.3.1 节；图~\ref{fig:ch4_first_plugin}（终端截图） \\
+2. 跟做 Build a tool（greet 返回 Hello, Ada!） & 已完成 & 4.3.2 节；图~\ref{fig:ch4_greet_ui}（Web UI 会话截图） \\
+3. greet 改造为业务工具（dev\_environment\_snapshot） & 已完成 & 4.3.3 节；图~\ref{fig:ch4_dev_snapshot} \\
+4. 解释 inject 必要性与 defineTool 各字段 & 已完成 & 原理分析节（\ref{tab:ch4_defineTool}） \\
+5. 至少一个安全约束 & 已完成 & 4.3.3 节安全边界 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Your first plugin：创建插件并看到终端输出}
+
+\begin{enumerate}[leftmargin=4em,itemsep=0pt,topsep=2pt]
+    \item 在源码仓库根目录创建 \texttt{scratch-plugin/src/my-plugin.ts}
+          ——插件 = 一个导出 \texttt{name}、\texttt{inject}、\texttt{apply}
+          的模块（\texttt{apply(ctx)} 在挂载时执行）：
+\end{enumerate}
+
+\begin{verbatim}
+import type { Context } from '@deepseek-ai/cordis'
+import { defineTool } from '@deepseek-ai/dsh-tools'
+
+export const name = 'my-first-plugin'
+export const inject = ['tools']    // 依赖 tools 服务
+
+export function apply(ctx: Context) {
+    // 实验 1：打印日志
+    console.log('[my-plugin] 插件已加载！')
+    // 实验 2：注册 greet 工具（见 4.3.2）
+    ctx.tools.register(defineTool({ ... }))
+}
+\end{verbatim}
+
+（为可读性省略正文；完整源码见 \nolinkurl{code/ch4-dsh/follow-official/scratch-plugin/src/my-plugin.ts}。
+注：终端实际输出含对勾表情（源码 \texttt{console.log} 中为
+``my-plugin 插件已加载！''加对勾），因等宽字体不含该字形，
+本代码块以文字代替——真实输出见图~\ref{fig:ch4_first_plugin}。）
+
+\begin{enumerate}[leftmargin=4em,itemsep=0pt,topsep=2pt]
+    \item 创建 \texttt{scratch-plugin/cordis.yml} Web overlay，把本地插件
+          插入插件树（官方要求 \texttt{name} 为\textbf{绝对路径}）：
+\end{enumerate}
+
+\begin{verbatim}
+- insert:
+    - id: my-plugin
+      name: .../game/agent-lab/deepseek-harness/
+            scratch-plugin/src/my-plugin.ts
+\end{verbatim}
+
+（\texttt{name} 为插件源码\textbf{绝对路径}，如上以省略号缩写；
+完整路径见仓库 \nolinkurl{code/ch4-dsh/follow-official/scratch-plugin/cordis.yml}。）
+
+\begin{enumerate}[leftmargin=4em,itemsep=0pt,topsep=2pt]
+    \item 用官方命令启动 Web UI 并加载 overlay（源码方式，仓库根目录执行）：
+\end{enumerate}
+
+\begin{verbatim}
+pnpm dsh web --patch ./scratch-plugin/cordis.yml
+\end{verbatim}
+
+\textbf{终端输出}（真实运行，图~\ref{fig:ch4_first_plugin}）：启动时
+apply 被挂载执行，终端打印 \texttt{[my-plugin] 插件已加载！}，随后
+服务器就绪——与官方教程预期
+``The terminal prints \texttt{[hello-plugin] plugin loaded!} during
+startup'' 一致（官方示例输出为英文 \texttt{[hello-plugin] plugin
+loaded!}，本章中文输出为同一行为）：
+
+\begin{verbatim}
+$ node --import tsx esm/apps/cli/src/bin.ts \
+        web --patch ./scratch-plugin/cordis.yml
+[my-plugin] 插件已加载！             <- apply() 终端输出
+dsh web: http://127.0.0.1:3080/?token=...（服务就绪）
+\end{verbatim}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{ch4_first_plugin_terminal.png}
+\caption{跟做 Your first plugin：\texttt{pnpm dsh web --patch
+./scratch-plugin/cordis.yml} 的真实终端输出
+\texttt{[my-plugin] 插件已加载！}（WSL2 源码编译环境，Node 22.22.3）。}
+\label{fig:ch4_first_plugin}
+\end{figure}
+
+\subsubsection{Build a tool：greet 被模型真实调用}
+
+在上面的 \texttt{my-plugin.ts} 中同时注册官方教程的工具
+\texttt{greet}（\texttt{defineTool} 声明参数 \texttt{name}、
+输出 \texttt{schema} 与 \texttt{render}，\texttt{execute} 返回
+\texttt{Hello, \$\{args.name\}!}）。随后在 DSH Web UI（模型：
+DeepSeek-V4 Flash；工作区：agent-lab）新建会话并发送任务：
+``Use the greet tool to greet Ada.''
+
+\textbf{运行结果}（真实会话，图~\ref{fig:ch4_greet_ui}）：模型自动发起
+\textbf{1 次工具调用}——\texttt{greet}，输入 \texttt{\{"name": "Ada"\}}，
+工具输出 \texttt{Hello, Ada!}，模型据此回答
+``I greeted Ada with a friendly 'Hello, Ada!' ''。会话统计：1 秒 2 步、
+输入 164 token / 输出 57 token、缓存命中 49.5\%。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{ch4_greet_ui.png}
+\caption{跟做 Build a tool：DSH Web UI 会话中模型真实调用 greet 工具
+（输入 \texttt{name=Ada} $\rightarrow$ 输出 \texttt{Hello, Ada!}），
+模型回答 ``I greeted Ada with a friendly 'Hello, Ada!' ''。}
+\label{fig:ch4_greet_ui}
+\end{figure}
+
+这就是``模型请求 $\rightarrow$ 工具调用 $\rightarrow$ 工具结果
+$\rightarrow$ 下一轮请求''的一次真实闭环：\texttt{greet} 的
+\texttt{execute} 返回 \texttt{Hello, Ada!}（官方实现逐字对应），
+经 \texttt{render} 后作为工具结果写回会话，模型把结果转成自然语言。
+（\texttt{inject = ['tools']} 与 \texttt{defineTool} 各字段的职责详见
+原理分析节（表~\ref{tab:ch4_defineTool}）。）
+
+\subsubsection{业务工具：dev\_environment\_snapshot（greet 的改造）}
+
+任务书必做实验 3 要求把官方 \texttt{greet} 改造成业务工具（示例：
+``返回当前目录、git 分支、Node/Python 版本、package manager、关键文件
+是否存在''）——在 \texttt{scratch-plugin/src/} 下新增插件
+\texttt{dev-snapshot.ts}（与 \texttt{my-plugin.ts} 同目录，
+\texttt{cordis.yml} 以第二条 \texttt{insert} 挂载），完整实现见
+\nolinkurl{code/ch4-dsh/follow-official/scratch-plugin/src/dev-snapshot.ts}。
+核心实现（\texttt{execute} 的探测逻辑）：
+
+\begin{verbatim}
+const cwd = process.cwd()
+gitBranch    = execSync('git branch --show-current')  // 非 git 目录
+nodeVersion  = process.version       // 如 v22.22.3
+pythonVersion = execSync('python3 --version')
+packageManager = 检测 pnpm / npm / yarn 锁文件
+keyFiles      = { package.json, README.md, .gitignore }
+\end{verbatim}
+
+\textbf{Web UI 会话实测}（与 4.3.2 同一会话：``使用 dev-snapshot 快照输出''，
+图~\ref{fig:ch4_dev_snapshot}）：模型调用
+\texttt{dev\_environment\_snapshot}，工具返回并展开快照——
+
+\begin{verbatim}
+工作目录: /home/KNtnx/game/agent-lab/deepseek-harness
+Git 分支: master           Node 版本: v22.22.3
+Python 版本: Python 3.12.3   包管理器: pnpm
+关键文件: package.json 存在  README 存在  .gitignore 存在
+\end{verbatim}
+
+与任务书示例逐项对应（当前目录/Git 分支/Node/Python 版本/包管理器/
+关键文件是否存在）。模型据此回答``环境已就绪，可创建软件依赖…''。
+会话统计：工具调用 1 次、输入 166 token/输出 230 token、缓存命中 49.5\%。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{ch4_dev_snapshot_ui.png}
+\caption{Web UI 会话调用 dev\_environment\_snapshot：模型发起 1 次工具
+调用，返回工作目录/Git 分支（master）/Node v22.22.3/Python 3.12.3/
+pnpm/关键文件三连存在，模型据此回复``环境已就绪''。}
+\label{fig:ch4_dev_snapshot}
+\end{figure}
+
+\textbf{说明}：该工具与第 5 章 \texttt{devops-scout} 插件的巡检能力同源
+（第 5 章为其强化版：增加依赖解析/测试探测/变更安全审计）。
+
+\subsubsection{安全边界（任务书必做实验 5 的设计与分析）}
+
+按任务书第 5 条要求设计安全约束；本章两个插件（\texttt{greet}、
+\texttt{dev\_environment\_snapshot}）的约束落实情况如下：
+\begin{enumerate}[leftmargin=4em,itemsep=0pt,topsep=2pt]
+    \item \textbf{只读优先}：\texttt{dev\_environment\_snapshot} 只读取
+          目录/版本信息与文件存在性，不写任何文件；
+    \item \textbf{写入范围受限}（若扩展为生成类工具）：只向参数指定的
+          输出目录（相对工作区）写入生成的文件，不触碰其他路径；
+    \item \textbf{敏感文件不读}：工具不读取 .env、密钥文件（只报存在性，
+          见 4.3.3 节 \texttt{dev\_environment\_snapshot}）；
+    \item \textbf{key 不进工具返回}：工具返回内容只含文件清单与检查结果，
+          不涉及任何凭据；
+    \item \textbf{命令白名单（默认拒绝）}：\texttt{dev\_environment\_snapshot}
+          的 \texttt{parameters} 为空——模型无法传入任何命令或路径参数，
+          \texttt{execute} 内部只执行硬编码的只读探测命令
+          （\texttt{git branch --show-current}、\texttt{python3
+          --version}、文件存在性检查），等效于最简白的名单
+          （一切外部输入默认拒绝）；
+    \item \textbf{高危操作人工确认}：本插件无高危操作；若后续扩展为执行
+          命令的工具，将接入 DSH 的 \texttt{tools/pre-execute} 权限管道
+          （allow/deny/ask 策略）。
+\end{enumerate}
+
+\subsection{原理分析}
+
+\subsubsection{inject = ['tools'] 为什么必要}
+
+\texttt{tools} 是 DSH 宿主提供的工具注册表服务。插件在 \texttt{apply} 里
+使用 \texttt{ctx.tools} 前必须先声明 \texttt{inject = ['tools']}：
+Cordis 只有对声明了硬依赖的插件才会等待对应服务就绪后再挂载；未声明时
+\texttt{ctx.tools} 可能为 \texttt{undefined}，或直接被 Guard 拒绝
+（``service tools is not declared''）。\texttt{inject} 同时把插件挂载
+顺序显式化，避免竞态。
+
+\textbf{本章两个插件的印证}：\texttt{my-plugin.ts}（4.3.1，插件名
+\texttt{my-first-plugin}）与 \texttt{dev-snapshot.ts}（4.3.3，插件名
+\texttt{dev-snapshot-plugin}）均在文件头部声明
+\texttt{export const inject = ['tools']} 后，才在\textbf{各自}的
+\texttt{apply(ctx)} 中调用 \texttt{ctx.tools.register(defineTool(...))}——
+\texttt{greet} 由 my-first-plugin 注册（4.3.2），
+\texttt{dev\_environment\_snapshot} 由 dev-snapshot-plugin 注册（4.3.3），
+两者经 \texttt{cordis.yml} 的两条 \texttt{insert} 分别挂载。注意：即便
+\texttt{dev\_environment\_snapshot} 的 \texttt{parameters} 为空（无参数
+工具，见 4.3.4 的``默认拒绝''安全边界），也要声明
+\texttt{inject=['tools']}——inject 声明的是\textbf{宿主能力依赖}
+（工具注册表服务），与工具参数多少无关。省略的后果：\texttt{ctx.tools}
+未就绪，插件加载时被 Guard 拒绝或运行时抛出
+``service tools is not declared''。
+
+\subsubsection{defineTool 各字段职责}
+
+\begin{table}[H]
+\centering
+\caption{\texttt{defineTool} 关键字段职责（对齐官方 cookbook/adding-a-tool；
+``本章用法''列为 4.3 节两个真实工具）}
+\label{tab:ch4_defineTool}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lp{4.1cm}p{4.5cm}}
+\toprule
+\textbf{字段} & \textbf{职责} & \textbf{本章用法} \\
+\midrule
+\texttt{name} & 工具唯一名（模型调用与注册表索引） & \texttt{greet}（4.3.2）、\texttt{dev\_environment\_snapshot}（4.3.3） \\
+\texttt{parameters} & 参数 schema，编译为 JSON Schema，execute 前自动校验 & greet：\texttt{name} 必填；dev-snapshot：\texttt{\{\}}（无参） \\
+\texttt{output.schema} & 规范化返回值的 schema（程序可消费） & greet：\texttt{\{type:'string'\}}；快照对象（cwd/gitBranch/... \texttt{additionalProperties:false}） \\
+\texttt{output.render} & 把规范化值转成模型可见文本块 & greet 返回 text 块；快照 \texttt{JSON.stringify(v, null, 2)} 展开 \\
+\texttt{execute} & 实际执行；args 已校验、需尊重 exec.signal & greet：\texttt{return Hello, \$\{args.name\}!}；快照：只读探测（见 4.3.3） \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+（表中字段均可与 4.3.2/4.3.3 的源码片段与图~\ref{fig:ch4_greet_ui}、
+图~\ref{fig:ch4_dev_snapshot} 直接对应；\texttt{output.render} 的
+``展开式''效果即图~\ref{fig:ch4_dev_snapshot} 中的可读快照。）
+
+\subsubsection{工具进入模型上下文的链路}
+
+注册的工具 schema 会自动进入系统提示词组装（``schemas flow into the
+system-prompt assembly automatically''）；模型按 schema 生成工具调用参数，
+注册表校验后进入执行管道（pre-execute 策略 / execute / post-execute），
+规范化结果经 \texttt{render} 后作为工具结果写入会话——与第 3 章分析的
+``模型请求—工具调用—工具结果—下一轮请求''链路一致，只是实现方从 Pi
+换成了 DSH。
+
+\subsubsection{profile / bundle / patch 分层}
+
+DSH 配置按层叠加：bundle（npm 包，声明 \texttt{dsh.bundle.patch}）→
+profile 自身 patch → home patch → 命令行 \texttt{--patch}。本章
+\ref{fig:ch4_first_plugin} 使用的即命令行 \texttt{--patch}（overlay）
+路径；bundle 路径上 \texttt{dsh plugin add} 检测到 \texttt{dsh.bundle}
+声明会把插件追加进 profile 的 \texttt{bundles} 列表，
+\texttt{--dump-config} 可查看合成后的插件层；home patch 与命令行
+patch 不能重复挂载同一插件 id，否则报 \texttt{duplicate loader entry
+id}（配置排错的一个真实案例）。
+
+\subsubsection{远程运行与安全访问（WSL 视作独立远程主机）}
+
+任务书的远程方案（远端 Linux + SSH 隧道访问 3080）在本机 WSL2 上再次
+完整验证。此处\textbf{把 WSL 当作一台独立的远程 Linux 主机}：访问不使用
+WSL 的 localhost 镜像/转发机制（该机制视为不存在），连接路径为
+``WSL 虚拟网卡 \texttt{eth0} 地址 $\rightarrow$ sshd:22''。
+\textbf{主机信息}：主机名 \texttt{Solaire-WSL}、用户 \texttt{KNtnx}、
+sshd 监听 \texttt{0.0.0.0:22}（仅本机可达）、专用密钥
+\texttt{id\_dsh\_wsl}（无口令，仅用于本隧道；\texttt{authorized\_keys}
+权限 600、\texttt{.ssh} 目录 700）。网卡地址为动态分配（WSL 重启会变），
+可用以下命令查询：
+
+\begin{verbatim}
+wsl -d Ubuntu-24.04 -- ip addr show eth0 | grep inet
+# -> inet <eth0-ip>/20 ...（动态，每次启动可能变化）
+\end{verbatim}
+
+\begin{verbatim}
+# 远端（WSL，即"远程主机"）启动 DSH（仅监听 loopback，不暴露网卡）：
+export DSH_HOME=~/.dsh-agent-lab
+npx -y @deepseek-ai/dsh@0.1.0-rc.6 web
+# -> dsh web: http://127.0.0.1:3080
+
+# 本机（Windows）建立 SSH 端口转发（标准远程主机形态）：
+ssh -N -L 13080:127.0.0.1:3080 \
+    KNtnx@<wsl-ip> -p 22 -i ~/.ssh/id_dsh_wsl
+# <wsl-ip> 为上面的 eth0 地址（实践时若本机 3080 已被本地 DSH 实例
+# 占用，隧道映射到 13080 即可；浏览器打开 http://127.0.0.1:13080）
+\end{verbatim}
+
+\textbf{端到端验证}（2026-08-30，均为真实终端与真实会话）：
+\begin{enumerate}[leftmargin=4em,itemsep=0pt,topsep=2pt]
+    \item \textbf{远端启动}（图~\ref{fig:ch4_ssh_start}）：WSL 中
+          \texttt{pnpm dsh web --patch ./scratch-plugin/cordis.yml}
+          启动（源码方式），终端打印 \texttt{[my-plugin] 插件已加载！}
+          与 \texttt{dsh web: http://127.0.0.1:3080/?token=...}；
+    \item \textbf{本机建立转发}（图~\ref{fig:ch4_ssh_tunnel}）：
+          \texttt{ssh -N -L 13080:127.0.0.1:3080 KNtnx@<wsl-ip> -p 22
+          -i \textasciitilde/.ssh/id\_dsh\_wsl}（连接成功进入保持态）；
+    \item \textbf{验证}（图~\ref{fig:ch4_ssh_verify}）：本机
+          \texttt{curl http://127.0.0.1:13080/} 返回
+          \texttt{dsh web authentication required; reopen the URL
+          printed by dsh web.}（DSH 令牌鉴权拦截——请求已完整穿透隧道
+          到达 DSH 服务，若隧道不通将是连接错误而非 HTTP 响应）；
+          再访问带 token 的 URL（\texttt{?token=...}，图内已打码）即正常
+          打开 Web UI（图~\ref{fig:ch4_remote}）。
+\end{enumerate}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.68\textwidth]{ch4_ssh_remote_start.jpg}
+\caption{SSH 验证第 1 步：远端（WSL 独立主机）启动 DSH——
+\texttt{pnpm dsh web --patch ./scratch-plugin/cordis.yml}，终端输出
+\texttt{[my-plugin] 插件已加载！}与 \texttt{dsh web:
+http://127.0.0.1:3080/?token=...}（token 已打码）。}
+\label{fig:ch4_ssh_start}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.62\textwidth]{ch4_ssh_tunnel_cmd.jpg}
+\caption{SSH 验证第 2 步：本机建立端口转发——\texttt{ssh -N -L
+13080:127.0.0.1:3080 KNtnx@<wsl-ip> -p 22 -i
+\textasciitilde/.ssh/id\_dsh\_wsl}（图中 IP 为本机 WSL 虚拟网卡地址，
+动态分配）。}
+\label{fig:ch4_ssh_tunnel}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.68\textwidth]{ch4_ssh_auth_verify.jpg}
+\caption{SSH 验证第 3 步：\texttt{curl http://127.0.0.1:13080/} 返回
+DSH 令牌鉴权提示（authentication required），随后带
+\texttt{?token=...} URL（已打码）访问成功——请求穿透隧道到达远端 DSH。}
+\label{fig:ch4_ssh_verify}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{ch4_remote_ui.jpg}
+\caption{通过 SSH 端口转发访问的远端（WSL，独立主机视角）DSH Web UI：
+地址栏 \texttt{127.0.0.1:13080}（隧道本地端口），同一会话中 greet 与
+dev\_environment\_snapshot 两个工具被模型真实调用并展示结果。}
+\label{fig:ch4_remote}
+\end{figure}
+
+安全要点（对照任务书第 5 步）：DSH 只监听 \texttt{127.0.0.1}，从网卡
+不可达；SSH 转发是唯一访问通道（加密）；公钥认证权限 600/700；
+DSH 令牌鉴权为第二道保护；内网 IP 以 \texttt{<wsl-ip>} 占位（动态分配
++ 脱敏，实测值仅保存在本地证据文件）。
+
+模型配置（第 6 步）：DSH 启动时自动把环境中密钥导入
+\texttt{DSH\_HOME/.credentials.yaml}（600 权限，Web UI Settings
+$\rightarrow$ Models 可见）；密钥只进凭据文件与环境变量，不进入仓库
+与报告。
+
+Workspace（第 7 步）：远端项目目录 \texttt{~/game/agent-lab/projects} 与
+\texttt{~/game/agent-lab/deepseek-harness} 在 UI ``选择工作区''可选。
+完整命令与本次验证记录见
+\nolinkurl{evidence/ch4/06_remote_dsh.txt}。
+
+\subsection{问题与改进}
+
+\begin{enumerate}[leftmargin=4em,itemsep=0pt,topsep=2pt]
+    \item \textbf{远程环境}：任务书建议远端 Linux + SSH 隧道访问 3080。
+          本章已在本机 WSL2（Ubuntu 24.04）上以\textbf{独立远程主机}视角
+          完整验证该方案：不依赖 WSL localhost 镜像，隧道目标为 WSL 虚拟
+          网卡地址（\texttt{ssh -L 13080:127.0.0.1:3080 KNtnx@<wsl-ip>}，
+          本机 3080 已被本地实例占用故映射 13080），直连登录成功、隧道
+          端到端到达 DSH（返回鉴权 401 响应即穿透证明），完整命令与
+          验证见 4.4.5 节与 \nolinkurl{evidence/ch4/06_remote_dsh.txt}。
+          端口 13080 与任务书示意的 3080 仅为本地端口号调整。
+          注：真正的多用户远端场景（每学生一个 DSH\_HOME）未实测。
+    \item \textbf{沙箱限制}：DSH 沙箱会拦截子进程窗口与部分 spawn/管道
+          操作（vitest 的 fork 池因此不可用），测试改用
+          \texttt{node --test --test-isolation=none} 单进程模式；
+          curl 的 TLS 凭据访问在沙箱内受限（见第 1 章环境限制说明）。
+    \item \textbf{版本漂移}：DSH 处于 developer preview，文档与 API 快速
+          迭代。本章命令与版本均记录在案：早期 \texttt{npx} 形态
+          \texttt{@deepseek-ai/dsh@0.1.0-rc.6}（npm，实际解析安装为
+          CLI 0.1.0-rc.7 / 组件 0.1.0-rc.8，cordis 4.0.1）；本章主环境
+          为\textbf{源码编译}（git clone，release
+          \texttt{0.1.2-alpha.1}，commit \texttt{cd5ef81}）——两种形态
+          版本不同，恰好验证了"记录版本、不把当前行为写成永久事实"的
+          必要性（任务书要求）。
+    \item \textbf{后续方向}：把 \texttt{dev\_environment\_snapshot} 扩展为
+          更完整的研发环境巡检（第 5 章 \texttt{devops-scout} 插件即为
+          强化版：增加依赖解析、测试探测、变更安全审计）；插件继续增加
+          配置项（settings 服务）与 UI 卡片（\texttt{presentCall/
+          presentResult}）接入 DSH Web。
+\end{enumerate}
+
+\begin{thebibliography}{9}
+
+\bibitem{dsh-repo}
+DeepSeek. DeepSeek Harness GitHub 仓库[EB/OL].
+\url{https://github.com/deepseek-ai/DeepSeek-Harness}，访问日期 2026-08-18.
+
+\bibitem{dsh-first}
+DeepSeek. Your first plugin——DSH 官方插件教程[EB/OL].
+\url{https://github.com/deepseek-ai/DeepSeek-Harness/blob/master/docs/user/develop/basic/index.md}，访问日期 2026-08-18.
+
+\bibitem{dsh-tool}
+DeepSeek. Build a tool——DSH 官方工具教程[EB/OL].
+\url{https://github.com/deepseek-ai/DeepSeek-Harness/blob/master/docs/user/develop/basic/tool.md}，访问日期 2026-08-18.
+
+\bibitem{dsh-publish}
+DeepSeek. Package and install a plugin——DSH 官方发布教程[EB/OL].
+\url{https://github.com/deepseek-ai/DeepSeek-Harness/blob/master/docs/user/develop/basic/publish.md}，访问日期 2026-08-18.
+
+\bibitem{dsh-cookbook}
+DeepSeek. Tool authoring reference——DSH 工具契约参考[EB/OL].
+\url{https://github.com/deepseek-ai/DeepSeek-Harness/blob/master/docs/cookbook/adding-a-tool.md}，访问日期 2026-08-18.
+
+\bibitem{dsh-arch}
+DeepSeek. DSH Architecture[EB/OL].
+\url{https://github.com/deepseek-ai/DeepSeek-Harness/blob/master/docs/architecture.md}，访问日期 2026-08-18.
+
+\bibitem{openssh}
+OpenSSH. Port forwarding manual[EB/OL].
+\url{https://www.openssh.com/manual.html}，访问日期 2026-08-18.
+
+\bibitem{dsh-video}
+Bilibili. 【极速入门】DeepSeek Harness 上手实战指南[EB/OL].
+\url{https://www.bilibili.com/}，访问日期 2026-08-18.
+（视频资料仅作辅助；本章关键命令与事实均以官方文档与源码为准，未采用
+视频内容作为依据——任务书允许视频仅作辅助。）
+
+\end{thebibliography}

@@ -1,0 +1,90 @@
+% !TEX program = xelatex
+% ============================================================
+%  智能体实训@2026 —— 大模型应用实训报告（合并版）
+%  姓名：陈昊    学号：14236202061
+%  编译：latexmk -xelatex main.tex   （TeX Live 2025）
+% ============================================================
+\documentclass[12pt,a4paper]{ctexart}
+
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0pt}
+
+\usepackage[top=2.54cm, bottom=2.54cm, left=3.17cm, right=3.17cm]{geometry}
+\setmainfont{Times New Roman}
+\usepackage{setspace}
+\setstretch{1.5}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{caption}
+\DeclareCaptionLabelFormat{zh}{\textbf{#1~#2}}
+\captionsetup{labelformat=zh,font=small,labelsep=quad,labelfont=bf}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{enumitem}
+\PassOptionsToPackage{numbers,sort&compress}{natbib}
+\usepackage{gbt7714}
+\usepackage[colorlinks,linkcolor=black,citecolor=black,urlcolor=black]{hyperref}
+
+\setlength{\parindent}{2em}
+\setlength{\parskip}{0pt}
+\emergencystretch=2em
+
+\ctexset{
+    section={
+        format = {\raggedright\heiti\zihao{3}},
+        beforeskip = {18pt plus 2pt minus 2pt},
+        afterskip = {12pt plus 2pt minus 2pt},
+    },
+    subsection={
+        format = {\raggedright\heiti\zihao{4}},
+        beforeskip = {12pt plus 2pt minus 2pt},
+        afterskip = {6pt plus 2pt minus 2pt},
+    },
+}
+
+\graphicspath{{../docs/figures/}}
+
+\begin{document}
+
+% ---------------- 封面 ----------------
+\begin{titlepage}
+\begin{center}
+    \vspace*{2cm}
+    {\heiti\zihao{1} 智能体实训@2026}\\[14pt]
+    {\songti\zihao{3} 大模型应用实训报告}\\[8pt]
+    {\songti\zihao{4}（DeepSeek Harness 与国内大模型 API 应用）}
+
+    \vspace{3cm}
+
+    {\songti\zihao{4}
+    \begin{tabular}{rl}
+        \textbf{姓\hspace{2em}名} & 陈昊、胡宇星 \\
+        \textbf{学\hspace{2em}号} & 14236202061、14236202065 \\
+        \textbf{群\hspace{2em}名} & 智能体实训@2026 \\
+        \textbf{分\hspace{2em}工} & 陈昊：章节代码与实验；胡宇星：教程盲测与文档编写 \\
+        \textbf{提交日期} & 2026-09-02 \\
+    \end{tabular}}
+
+    \vfill
+    {\songti\zihao{5} 实训周期：2026-08-20 至 2026-09-02}
+\end{center}
+\end{titlepage}
+
+% ---------------- 目录 ----------------
+\tableofcontents
+\newpage
+
+% ---------------- 各章 ----------------
+\input{ch1.tex}
+\input{ch2.tex}
+\input{ch3.tex}
+\input{ch4.tex}
+\input{ch5.tex}
+\input{appendix.tex}
+
+\end{document}

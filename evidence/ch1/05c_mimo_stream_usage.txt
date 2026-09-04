@@ -1,0 +1,18 @@
+========================================================================
+实验 4 补充：MiMo 流式 usage 验证（include_usage）
+运行时间：2026-08-18T23:08:18
+证据文件：E:\game\2026下半年暑假实训\evidence\ch1\05c_mimo_stream_usage.txt
+========================================================================
+
+问题：用一句话介绍 HTTP 状态码 200 的含义。
+
+[1] mimo 流式 + stream_options={'include_usage': True}
+    共收到 45 个 chunk，其中含正文的 chunk 数：11
+    [usage chunk] {'completion_tokens': 101, 'prompt_tokens': 265, 'total_tokens': 366, 'completion_tokens_details': {'accepted_prediction_tokens': None, 'audio_tokens': None, 'reasoning_tokens': 0, 'rejected_prediction_tokens': None}, 'prompt_tokens_details': {'audio_tokens': None, 'cached_tokens': 192}}
+    => mimo 流式支持 include_usage，可获取 usage ✓
+
+[2] 与 kimi-k3 对比
+    实验 4 中 kimi-k3 流式（include_usage=True）成功返回 usage：
+    usage: prompt=119 completion=387 total=506（reasoning_tokens=294）
+    => 两平台流式均支持 usage 统计；区别在于 kimi 的 usage 含
+       reasoning_tokens 明细，mimo 的 usage 结构与模型相关。

@@ -1,0 +1,29 @@
+{
+  "name": "dsh-learning-report",
+  "version": "0.1.0",
+  "description": "dsh 插件：项目技术报告与复现方案 — 收集项目快照，生成 TECHNICAL_REPORT.md 与 REPRODUCTION.md",
+  "type": "module",
+  "main": "lib/index.js",
+  "files": ["lib/", "skills/", "cordis.patch.yml"],
+  "scripts": {
+    "build": "esbuild --bundle --platform=node --format=esm --external:@deepseek-ai/* --outfile=lib/index.js src/learning-report.ts",
+    "pack": "pnpm pack",
+    "prepublishOnly": "pnpm build"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-tools": "^0.1.1-rc.2",
+    "@deepseek-ai/dsh-skill-filesystem": "^0.1.1-rc.2"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": { "optional": true },
+    "@deepseek-ai/dsh-tools": { "optional": true },
+    "@deepseek-ai/dsh-skill-filesystem": { "optional": true }
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "license": "MIT"
+}

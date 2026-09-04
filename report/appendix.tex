@@ -1,0 +1,73 @@
+% ============================================================
+%  附录：代码仓库地址、环境版本总表、参考资料总表、截图脱敏声明
+% ============================================================
+\clearpage
+\appendix
+\section{附录}
+
+\subsection{代码仓库地址}
+
+\begin{itemize}[leftmargin=4em,itemsep=0pt,topsep=2pt]
+    \item \textbf{实训工作区（完整仓库}：实验脚本、证据、报告源码、
+          插件源码，\texttt{E:\textbackslash game\textbackslash 2026下半年暑假实训}；
+          本地 git 仓库（\texttt{git init} 于 2026-08-19，随章节推进持续
+          提交，提交信息见仓库历史）；\texttt{.env} 已被 \texttt{.gitignore}
+          排除，不会随仓库外传。GitHub链接：
+    \item \textbf{干净交付文件夹}（本报告 + 任务书 + 报告用到的源码/证据/
+          截图，无中间产物）：\texttt{E:\textbackslash game\textbackslash
+          2026下半年暑假实训\textbackslash 2026智能23-1bf陈昊\&胡宇星组}。
+    \item \textbf{个人插件仓库}（第 5 章 \texttt{dsh-learning-report} 等）：
+          \nolinkurl{code/ch5-alpha/dsh-plugins/}（含于工作区仓库）。
+    \item 第 3 章分析对象：\nolinkurl{github.com/earendil-works/pi}
+          （commit \texttt{59a71b2}）。
+    \item 第 4/5 章插件参考：\nolinkurl{github.com/omdsh-dev/dsh-toolkit}、
+          \nolinkurl{github.com/omdsh-dev/dsh-tool-time} 等（见各章参考文献）。
+\end{itemize}
+
+\subsection{环境版本总表}
+
+\begin{table}[H]
+\centering
+\caption{全报告运行环境与依赖版本总表}
+\label{tab:appendix_env}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lp{8.2cm}}
+\toprule
+\textbf{项目} & \textbf{版本/配置} \\
+\midrule
+操作系统 & Windows 11 专业版（build 26200 / 25H2） \\
+Python & 3.11.15（Miniconda 环境 ML-base，E:\textbackslash{}Miniconda\textbackslash{}envs\textbackslash{}ML-base） \\
+openai SDK & 2.37.0（第 1/2 章实验；.env 解析为脚本内置实现，无需额外依赖） \\
+matplotlib & 3.10.9（图表绘制） \\
+Node.js / npm / pnpm & v24.18.0 / 12.0.2 / 11.22.0 \\
+DSH & @deepseek-ai/dsh 0.1.0-rc.6（npm 全局） \\
+@deepseek-ai/dsh-tools / cordis & 0.1.0-rc.6 / 4.0.1 \\
+git / curl & 2.55.0.windows.4 / 8.21.0 \\
+TeX Live & 2025（xelatex / latexmk / ctex / gbt7714） \\
+Pi（第 3 章） & @earendil-works/pi-agent-core 0.84.2（commit 59a71b2） \\
+模型 & mimo-v2.5（第 1/2 章主实验）；kimi-k3（第 1 章模型对比实验） \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{参考资料总表}
+
+各章参考文献已列于章末。此处汇总全部引用类型：国内模型官方 API 文档
+（Kimi/小米 MiMo/火山方舟/阿里云百炼/DeepSeek）、HTTP/JSON/curl 基础资料
+（MDN/RFC 8259/curl 官方）、prompt/context/agent 论文与深度文章（ReAct、
+Anthropic 系列、OpenAI harness engineering）、Pi 与 DSH 源码与官方文档、
+远程开发资料（OpenSSH）以及社区插件仓库。所有引用均注明标题、URL 与
+访问日期（2026-08-17 至 2026-08-19）。
+
+\subsection{截图脱敏声明}
+
+\begin{enumerate}[leftmargin=4em,itemsep=0pt,topsep=2pt]
+    \item 第 1 章全部运行窗口截图与控制台截图经逐张检查：无 API key 明文
+          （平台以星号/部分字符遮挡，或由作者手动遮挡）；
+    \item DeepSeek 控制台截图中的充值余额已由作者遮挡；累计消费为账户历史
+          统计，图注已说明；
+    \item 报告全文与仓库中不存在明文密钥；\texttt{.env} 仅存本机并被
+          \texttt{.gitignore} 排除；
+    \item 第 5 章审计工具输出统一经脱敏层处理（sk- 等模式替换为占位符）。
+\end{enumerate}

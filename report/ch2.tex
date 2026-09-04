@@ -1,0 +1,407 @@
+% ============================================================
+%  第二章：提示词到智能体的演化
+% ============================================================
+\clearpage
+\section{第二章：提示词到智能体的演化}
+
+\subsection{背景}
+
+prompt engineering 解决的是``如何问''的问题，适合单次任务和短链路任务。
+随着任务变长，模型需要看到项目文件、约束、历史、工具说明、测试结果和外部
+数据，于是问题变成``模型应该看到什么''，这就是 context engineering。再往后，
+模型不仅要看，还要行动：读文件、写文件、跑命令、搜索、调用 API、开子任务，
+这需要 harness engineering。最后，多步任务必须不断观察结果、修正计划、判断
+是否结束，这才进入 loop agent。
+
+演化的内在逻辑：任务复杂度越高、时间跨度越长、外部环境越真实、错误代价
+越大，工程重心就越从``写好一句 prompt''转向``管理上下文、约束工具、记录
+状态、验证结果和设计循环''。本章用一个真实任务（写一份``学生 API 调用
+入门教程''）做四层递进实验，量化每一层带来的变化。
+
+\subsection{概念背景：四层各控制什么}
+
+\begin{table}[H]
+\centering
+\caption{四个 engineering 层级：工程对象与解决的问题}
+\label{tab:ch2_levels}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{p{2.5cm}p{4.2cm}p{4.2cm}p{3.2cm}}
+\toprule
+\textbf{层级} & \textbf{工程对象} & \textbf{主要解决问题} & \textbf{控制面} \\
+\midrule
+Prompt & 一条/一组指令、示例、输出格式约束 & 让单次模型调用更稳定、更符合格式 & 怎么问 \\
+Context & 模型本次采样能看到的全部 token & 在有限上下文内放入``刚好需要''的信息 & 看什么 \\
+Harness & 模型外部的运行时：工具、权限、沙箱、日志、检查器 & 让模型能安全感知环境、行动、被约束、被验证 & 能做什么 \\
+Loop agent & ``观察 - 思考 - 调工具 - 观察 - 判断是否继续'' 的控制循环 & 处理多步、长时、不确定、需反馈修正的任务 & 何时停 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+四个层级不是替代关系，而是外层包住内层（图~\ref{fig:ch2_evolution}）：
+loop 的每一轮都需要 harness 提供工具与约束，harness 的每一次模型请求都
+需要 context 提供材料，context 的组织方式又由 prompt 的结构决定。
+
+\subsubsection{为什么 context 不是把资料全部塞进 prompt}
+
+上下文包不采用``全量投射''而是``精选摘要 + 引用''，原因有四：
+\begin{enumerate}[leftmargin=4em,itemsep=0pt,topsep=2pt]
+    \item \textbf{有限上下文窗口}：token 预算有限，全量放入必然挤压
+          任务相关信息的空间；
+    \item \textbf{信息污染}：无关材料会让模型跑偏（工程语境称 context rot，
+          上下文腐化），文档里与任务无关的章节、广告话术都是噪音；
+    \item \textbf{成本与延迟}：token 越多费用与耗时越高（第 1 章费用
+          记录：费用 = token $\times$ 单价，上下文占用量直接计价）；
+    \item \textbf{可维护性}：资料有版本与来源，全量塞入无法逐项标注
+          更新策略；正确做法是把``刚好需要''的信息按来源摘要进上下文，
+          完整文档放在文件系统/检索里按需取用——这正是本章上下文包的
+          设计（官方文档摘要 + 学生画像 + 模板要求，每项标注来源）。
+\end{enumerate}
+
+\subsubsection{为什么工具说明也是 prompt/context 的一部分}
+
+模型只有``看到''工具说明（名字、参数、用途、输出约定与使用时机），
+才能决定是否调用、如何填参数。工具说明随注册进入系统提示词组装
+（第 4 章验证：注册工具 schema 自动流入系统提示词——``schemas flow
+into the system-prompt assembly automatically''），因此工具说明本质上
+是 context engineering 的对象：参数描述清晰、用途边界明确的说明，
+模型才用得对；工具说明含糊（参数含义不明、无输出约定）会导致模型
+反复试错、填错参数甚至干脆不用工具。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{ch2_evolution.png}
+\caption{prompt → context → harness → loop agent 四层嵌套演化示意。}
+\label{fig:ch2_evolution}
+\end{figure}
+
+\subsubsection{harness 与 framework、IDE、MCP、plugin、sandbox、CI 的关系}
+
+harness 不是某一个具体技术，而是``模型外部的运行时''这一角色的总称，它与
+常见概念的关系是：
+\begin{itemize}[leftmargin=4em,itemsep=0pt,topsep=2pt]
+    \item \textbf{framework（框架）}：harness 可以用框架实现（如 LangChain/
+          Pi/DSH 各自的内核），但框架是软件形态，harness 是职责——同一个
+          harness 职责可以由不同框架承载；
+    \item \textbf{IDE（Agent IDE / 编辑器）}：IDE 是 harness 能力的交互
+          载体——DSH Web UI、CodeBuddy 等把 harness 的工具、会话、审计与
+          权限包装成聊天/编辑器界面；IDE 与 harness 是``界面 vs 运行时''
+          的关系，同一天 harness 可以驱动不同前端；
+    \item \textbf{MCP}：MCP 是工具接入的开放协议（模型-工具之间的标准化
+          传输层），harness 是执行环境——harness 通过 MCP 客户端接入外部
+          MCP server 的工具，MCP 解决``工具怎么连''，harness 解决``工具
+          怎么被安全地调度与验证''；
+    \item \textbf{plugin}：插件是 harness 的组合单元——DSH 的
+          ``Everything is a plugin'' 表明模型、工具、沙箱、UI 都可作为插件
+          挂载进 harness 运行时；
+    \item \textbf{sandbox}：沙箱是 harness 的权限边界之一——工具执行的隔离
+          环境（文件系统/网络/进程限制），属于 harness engineering 的安全
+          约束面；
+    \item \textbf{CI}：CI 是 harness 质量保障的延伸——把检查器、回归测试、
+          评审流程接入 agent 循环（如第 2 章 loop 层的 rubric 检查器，放大
+          到仓库级就是 CI 化的 agent 流水线）。
+\end{itemize}
+
+\subsection{实验设计：同一任务四层递进}
+
+\begin{enumerate}[leftmargin=4em,itemsep=0pt,topsep=2pt]
+    \item \textbf{Prompt 层}：只给模型一句任务：``写一个面向零基础学生的
+          大模型 API 调用入门教程''，无任何额外信息；
+    \item \textbf{Context 层}：在系统提示中加入上下文包：Kimi 官方文档摘要
+          （申请/调用/计费要点）、OpenAI-compatible 迁移说明、目标学生基础、
+          报告模板要求；
+    \item \textbf{Harness 层}：保留上下文包，并给模型一套\textbf{真实工具集
+          }：\texttt{write\_file}（写入沙箱文件）、\texttt{run\_tests}
+          （运行独立测试脚本）、\texttt{bash}（执行命令，黑名单保护）——即
+          ``脚本 + 测试 + JSON 校验 + rubrics''的完整能力（循环模式改编自
+          Claude Code 教学实现 s01/s02：\texttt{TOOLS} schema +
+          \texttt{tool\_result} 回传）。模型必须\textbf{实际调用工具}才能
+          完成任务，且只允许写入沙箱目录；
+    \item \textbf{Loop 层}：同一套工具集，但把检查器接入循环——每轮若测试
+          未全部通过，程序把失败项注入下一轮消息要求修改，最多 4 轮，直到
+          测试全过（\texttt{16/16}）或达上限。
+\end{enumerate}
+
+四层使用同一任务、同一模型（\texttt{mimo-v2.5}，非 pro 档；输入 ¥1/M、
+输出 ¥2/M，见官方定价页）、同一上下文包（后三层），只改变
+``约束与循环''的层级，量化各层增量收益。选 MiMo 而非第 1 章的
+kimi-k3 出于成本考虑：四层多轮调用（第 3/4 层为多回合工具循环），
+kimi 需 ¥1 以上、MiMo v2.5 约 ¥0.05——对比实验多轮调用用便宜模型
+性价比更高（平台差异已在第 1 章对比）。实验脚本见
+\nolinkurl{code/ch2-evolution/}（layers.py、harness\_tools.py、
+rubric.py、tests/test\_tutorial.py），原始日志见
+\nolinkurl{evidence/ch2/02_layers.txt}（2026-08-30 完整运行，
+含每回合工具调用记录、测试报告与 [END] 完成标记）。
+
+\subsection{实验结果}
+
+四层实验均使用 \texttt{mimo-v2.5}，任务与上下文包相同，只改变约束
+层级。检查结果、耗时/usage 统计见表~\ref{tab:ch2_result}；完整原始
+输出（含模型编造的端点、错误模型名与引用日期等细节，见各层分析）见
+\nolinkurl{evidence/ch2/02_layers.txt}。
+
+\begin{table}[H]
+\centering
+\caption{四层递进实验结果（同一任务，mimo-v2.5，2026-08-30 运行）}
+\label{tab:ch2_result}
+\small
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{p{2.5cm}p{2.3cm}p{2.3cm}p{2.3cm}p{2.3cm}}
+\toprule
+\textbf{指标} & \textbf{1 层 Prompt} & \textbf{2 层 Context} & \textbf{3 层 Harness} & \textbf{4 层 Loop} \\
+\midrule
+rubric 覆盖 & 8/8 & 8/8 & 16/16* & 16/16* \\
+输出格式 & 自由 Markdown & 自由 Markdown & JSON 文件 & JSON 文件 \\
+工具调用 & -- & -- & 是（实际调用） & 是（实际调用） \\
+聚焦平台 & 否（泛化 OpenAI） & 是 & 是 & 是 \\
+单次耗时 (s) & 40.1 & 45.4 & 多回合工具 & 多回合工具 \\
+usage 输入/输出 & 265/2509 & 326/2681 & 见*注释 & 见*注释 \\
+循环轮数 & -- & -- & 2 回合上限 & 第 1 轮 16/16 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{数据说明}：本次实验为 2026-08-30 完整运行（日志含开始时间
+与 [END] 结束标记）。* 第 3/4 层的测试为 \texttt{tests/test\_tutorial.py}
+的 16 项检查（JSON 五字段 + rubric 八项 + 引用格式）；第 3/4 层为
+多回合工具循环（每次模型请求都真实计费），逐回合 token 明细已在
+\texttt{harness\_tools.py} 增补（下次运行记录），本次以第 1/2 层实测
+usage 核算并结合模型回合数估算：四层合计费用约 ¥0.05，以平台控制台
+账单为准。各层的日志原文证据见相应小节（``日志证明''）。
+
+\subsubsection{第 1 层：只有一句话}
+
+只给模型一句任务（``写一个面向零基础学生的大模型 API 调用入门教程''）。
+rubric 关键词检查显示 8/8 全部命中，但细读输出发现三个问题：
+\begin{enumerate}[leftmargin=4em,itemsep=0pt,topsep=2pt]
+    \item \textbf{任务平台错位}：模型把示例完全建立在 \textbf{OpenAI} 上
+          （\texttt{gpt-3.5-turbo}、\nolinkurl{api.openai.com}，还顺带提了
+          百度文心一言），而实训实际使用国内平台（第 1 章 Kimi/MiMo）——
+          prompt 层没有上下文约束时，模型按自己的先验选择平台；
+    \item \textbf{环境与接口信息失真}：`示例代码` 用的
+          \texttt{openai.ChatCompletion.create}（API 已废弃的旧写法）、
+          成本提示``每 1000 token 约 0.002 美元''（不是国产平台计费），
+          文末 ``本教程最后更新：2024 年 7 月'' 也是编造的日期——
+          rubric`示例代码` 项被关键词命中，但内容不可直接复现；
+    \item \textbf{引用缺失}：文末没有给出任何官方文档链接（rubric
+          `参考链接` 项未命中关键词，靠``推荐学习资源''泛泛表述凑过）。
+\end{enumerate}
+结论：关键词覆盖率高是``泛化的覆盖''——输出与当前任务环境（实训平台、
+学生基础、报告模板）不匹配，甚至换用另一套技术栈（OpenAI）；这正是
+context 层要解决的问题。
+
+\textbf{日志证明}（\nolinkurl{evidence/ch2/02_layers.txt} 本节原文节选，
+括号内为措辞提炼，其余逐字保留）：
+
+\begin{verbatim}
+[Prompt] 40.1s | usage: 265/2509
+[输出]
+# 大模型 API 调用入门教程
+**——面向零基础学生的友好指南**
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+    url = "https://api.openai.com/..."
+    ...（文末）本教程最后更新：2024 年 7 月
+[rubric 检查] 未覆盖要点：全部覆盖
+[要点覆盖] 8/8
+\end{verbatim}
+
+\subsubsection{第 2 层：加入上下文包}
+
+在系统提示中加入上下文包（Kimi 官方文档摘要、OpenAI-compatible 迁移说明、
+目标学生基础、报告模板要求）。输出立刻发生三个可见变化：
+\begin{enumerate}[leftmargin=4em,itemsep=0pt,topsep=2pt]
+    \item \textbf{平台对齐}：全篇以 Kimi 为例，给出
+          \nolinkurl{api.moonshot.cn/v1/chat/completions} 的真实端点与
+          sk- 开头的 key 说明，与上下文包中的官方文档摘要一致；
+    \item \textbf{学生基础对齐}：``以 Kimi 平台为例，面向零基础学生''，
+          环境准备表写明``Python 3 已具备（课程要求）''——上下文包中的
+          学生画像直接进入输出；
+    \item \textbf{结构对齐}：出现``背景说明/环境准备/实验步骤/结果/对比
+          分析''的报告结构雏形，费用说明指向官方定价页。
+\end{enumerate}
+但请同时注意第 2 层输出里的两处\textbf{事实性错误}：
+\textbf{(1) 模型名错误}——示例代码与结果中使用的模型是
+\texttt{moonshot-v1-8k}，而上下文包（第 1 章实测与官方摘要）给出的是
+\texttt{kimi-k3}；\textbf{(2) 引用日期编造}——参考资料``访问日期：2024 年 7 月''，
+上下文包\textbf{没有}提供任何访问日期。也就是说：context 层解决了
+``看什么/举例贴不贴近''，但\textbf{无法保证事实性细节正确}（模型名、
+日期、版本号等易被模型填充为似是而非的值）——这正是第 3 层引入
+\textbf{外部校验与测试}的动机。
+
+\textbf{日志证明}（\nolinkurl{evidence/ch2/02_layers.txt} 本节原文节选）：
+
+\begin{verbatim}
+[Context] 45.4s | usage: 326/2681
+[输出]
+# 大模型 API 调用入门教程
+## 一、背景说明
+...（以 Kimi 为例，API 端点 api.moonshot.cn/v1/...）
+    payload = {
+        "model": "moonshot-v1-8k",
+...
+*   访问日期：2024年7月
+[rubric 检查] 未覆盖要点：全部覆盖
+[要点覆盖] 8/8
+\end{verbatim}
+
+\subsubsection{第 3 层：Harness（工具 + 脚本 + 测试）}
+
+本层把``约束''从提示词彻底挪到模型外部：不依赖模型自觉遵守格式，
+而是给模型一套\textbf{必须实际使用}的工具（改编自 Claude Code 教学
+实现 s01\_agent\_loop.py / s02\_tool\_use.py 的工具循环模式——
+\texttt{TOOLS} schema 分发 + \texttt{tool\_result} 回传）：
+
+\begin{verbatim}
+工具 1  write_file(path, content)   写入沙箱文件
+工具 2  run_tests(path)        运行 16 项测试
+工具 3  bash(command)          执行命令（黑名单）
+循环    tool_call -> tool_result -> 下一轮
+\end{verbatim}
+
+\textbf{本层实测}（\texttt{max\_tool\_turns=2}：只允许``写 + 测''各一次，
+验证面完整即强制结束，不自动迭代；以下为
+\nolinkurl{evidence/ch2/02_layers.txt} 日志原文）：
+
+\begin{verbatim}
+[turn 1] 模型调用工具 write_file(...)
+    -> 结果：Wrote 3378 chars -> sandbox
+[turn 2] 模型调用工具 run_tests(...)
+    -> 结果：PASS 全 16 项（节选）
+[turn 3] 工具回合已达上限 2，强制结束
+    （harness 验证面完成，不自动迭代）
+== 测试汇总：16/16 项通过 ==
+\end{verbatim}
+
+与第 2 层的可见差异：模型不再``交出文本等人工检查''，而是\textbf{把
+教程落盘成文件、运行独立测试、逐项看到 PASS/FAIL}——判定结论由
+\texttt{test\_tutorial.py} 给出（16 项：五字段结构 + rubric 八项 +
+引用 URL/日期格式），模型不能自评，绕不过去（不写文件、不跑测试就
+没有完成信号）。安全边界同时生效：写入限于沙箱目录、bash 带黑名单
+（改编 s01 的危险命令拦截）。
+
+本层边界（必须指出）：\textbf{(1)} 测试脚本判定的是``结构与关键词''——
+16/16 通过不代表内容真实（引用日期真伪需要人工/外部核对，测试只做了
+格式检查并输出``日期标注''提示）；\textbf{(2)} \texttt{max\_tool\_turns=2}
+意味着本层\textbf{不自动迭代}——测试通过了（16/16）最好；若未通过，
+harness 记录失败就结束（修正动作留给第 4 层）。
+
+\subsubsection{第 4 层：Loop agent}
+
+同一套真实工具集，但把检查器\textbf{接入循环}：每轮运行后程序解析
+测试报告，若未全部通过，把失败项注入下一轮消息（``上一轮测试未通过
+以下检查项：…''），最多 4 轮，直到 \texttt{16/16} 或达上限。
+
+\textbf{本层实测}：第 1 轮即通过（以下为
+\nolinkurl{evidence/ch2/02_layers.txt} 日志原文）：
+
+\begin{verbatim}
+--- 第 1 轮 ---
+[turn 1] 模型调用工具 write_file(...)
+    -> 结果：Wrote 6997 chars -> sandbox
+[turn 2] 模型调用工具 run_tests(...)
+    -> 结果：== 测试汇总：16/16 项通过 ==
+[完成] 第 1 轮通过全部 16 项测试！
+[最终输出] 已通过验证（8 个模块：
+  背景/环境/步骤/结果/对比/安全/错误处理/引用）
+\end{verbatim}
+
+第 1 轮输出覆盖背景说明/环境准备/实验步骤/结果分析/对比分析/安全注意/
+错误处理/参考资料 8 个模块（模型在最终答复中给出模块清单），测试逐项
+判定通过。这个结果说明两件事：
+\begin{enumerate}[leftmargin=4em,itemsep=0pt,topsep=2pt]
+    \item 当 prompt/context/harness 充分时，loop 的修正轮次可以很少
+          （本实验第 1 轮通过）——循环的价值不在于``必须多轮''，而在于
+          ``有检查器才能可靠地知道何时停止''；
+    \item \textbf{停止条件的天花板 = 测试的边界}：测试脚本覆盖结构/关键词/
+          格式，``16/16 通过''不等于``内容真实''（引用日期真伪本是
+          测试里标注的``待人工核对''项）——不可验证的事实性内容需要
+          外部验证手段（如脚本比对官方页面修订时间），否则 Agent 会在
+          错误事实上``自信地''收敛。这也是反思节``哪些任务用 agent
+          风险更大''的实证。
+\end{enumerate}
+
+\subsection{Agent 的本质}
+
+\begin{quote}
+\textbf{定义}：Agent 是一个由模型驱动、在外部 harness 约束下运行的闭环系统。
+它维护任务状态，把合适上下文交给模型，允许模型选择工具或动作，把观察结果
+写回状态，并根据目标、检查器或人工反馈决定继续、修正、求助或停止。
+单次 LLM API 调用不是 agent；只有模型没有工具和状态也不是完整 agent；
+只有 while loop 但没有目标检查、权限和可观测性也不可靠。
+\end{quote}
+
+本实验使用的循环机制抽象为最小 agent loop 伪代码（与第 4 层实验
+\verb|layers.py| 的实现对应）：
+
+\begin{verbatim}
+state = { task, messages=[],
+          上下文包, 检查器=rubric, 上限=4 }
+while 检查器未全部通过 and 轮数 < 上限:
+    view    = 组上下文(state)    # context 组装
+    reply   = model.complete(view) # 模型请求
+    if reply 含工具调用:
+        # harness：校验 -> 执行 -> 写回
+        results += execute(reply.tools)
+        # 本实验无工具分支，
+        # 工具循环实证见第 3/4 章
+    messages += 模型回复 + 工具结果   # 状态更新
+    report  = 检查器判定(state)  # 停止条件
+    if report 未通过:
+        # 修正输入
+        messages += 未过项反馈
+print(通过/失败, 轮数, 耗时, token)
+\end{verbatim}
+
+第 4 层实验真实运行的是\textbf{检查器反馈环}：模型生成 → \texttt{json.loads}
++ rubric 判定 → 未通过项并入下一轮消息 → 再生成，直到通过或到上限。它
+证明的是 agent 的``环''与``停止条件''侧面。完整的\textbf{工具调用循环}
+（模型请求 → 工具调用 → 工具结果 → 下一轮请求）由第 3 章 Pi 源码分析
+与第 4 章 DSH 插件实测（\texttt{greet} 工具被模型调用、结果写回会话）
+承接——两个侧面合起来才构成定义中的完整 agent。
+
+\subsection{反思}
+\label{sec:ch2_reflection}
+
+\begin{enumerate}[leftmargin=4em,itemsep=0pt,topsep=2pt]
+    \item \textbf{哪些任务不需要 agent}：单轮问答、格式固定的转换任务，
+          一次调用即可，loop 只是浪费延迟与 token。
+    \item \textbf{哪些任务用 agent 风险更大}：高副作用（支付、删除）任务，
+          必须配合权限与人工确认；不可验证的任务（主观写作），检查器无法
+          提供可靠的停止信号。
+    \item \textbf{如何设计停止条件}：优先``检查器全通过''；其次轮数/预算
+          上限；再次人工确认。停止条件决定了 agent 的可靠性边界。
+\end{enumerate}
+
+\begin{thebibliography}{9}
+
+\bibitem{kimi-doc-ch2}
+Moonshot AI. Kimi API 快速开始[EB/OL].
+\url{https://platform.moonshot.cn/docs/guide/start-using-kimi-api}，
+访问日期 2026-08-18.
+
+\bibitem{anthropic-prompt}
+Anthropic. Prompt engineering overview[EB/OL].
+\url{https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/overview}，
+访问日期 2026-08-17.
+
+\bibitem{anthropic-context}
+Anthropic. Effective context engineering for AI agents[EB/OL].
+\url{https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents}，
+访问日期 2026-08-17.
+
+\bibitem{react}
+Yao S, Zhao J, Yu D, et al. ReAct: Synergizing Reasoning and Acting in
+Language Models[C]. ICLR 2023.
+\url{https://arxiv.org/abs/2210.03629}，访问日期 2026-08-17.
+
+\bibitem{agents-anthropic}
+Anthropic. Building Effective AI Agents[EB/OL].
+\url{https://www.anthropic.com/research/building-effective-ai-agents}，
+访问日期 2026-08-17.
+
+\bibitem{openai-harness}
+OpenAI. Harness engineering[EB/OL].
+\url{https://openai.com/index/harness-engineering/}，访问日期 2026-08-17.
+
+\end{thebibliography}

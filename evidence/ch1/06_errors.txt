@@ -1,0 +1,33 @@
+========================================================================
+实验 6：错误处理（故意触发错误并记录）
+运行时间：2026-08-18T22:27:59
+证据文件：E:\game\2026下半年暑假实训\evidence\ch1\06_errors.txt
+基准 provider：kimi  model：kimi-k3
+真实 key 脱敏：sk-Uch***xYtg
+========================================================================
+
+--- A. 错误 API key（无效密钥） ---
+  [异常类型] AuthenticationError
+  [HTTP 状态码] 401
+  [错误内容] {"error":{"message":"Invalid Authentication","type":"invalid_authentication_error"}}
+
+--- B. 错误模型名（不存在的 model） ---
+  [异常类型] NotFoundError
+  [HTTP 状态码] 404
+  [错误内容] {"error":{"message":"Not found the model nonexistent-model-xyz or Permission denied","type":"resource_not_found_error"}}
+
+--- C. 错误 base_url（不存在的路径） ---
+  [异常类型] NotFoundError
+  [HTTP 状态码] 404
+  [错误内容] {"code":5,"error":"url.not_found","message":"没找到对象","method":"POST","scode":"0x5","status":false,"ua":"OpenAI/Python 2.37.0","url":"/v1/badpath/chat/completions"}
+
+--- D. 请求体缺字段（messages 缺失） ---
+  [异常类型] BadRequestError
+  [HTTP 状态码] 400
+  [错误内容] {"error":{"message":"Invalid request: messages must not be empty","type":"invalid_request_error"}}
+
+[排查要点]
+1) 401 Unauthorized：key 无效/过期/无权限，检查环境变量是否设置正确；
+2) 400 Bad Request：请求体或模型名非法，检查 model 拼写、messages 格式；
+3) 404：URL 路径不存在，检查 base_url 是否以 /v1 结尾等；
+4) 429 Too Many Requests：限流，需要退避重试（报告对比分析中详述）。

@@ -1,0 +1,7 @@
+# 第 1 章实验依赖（运行环境：Miniconda ML-base 环境，Python 3.11.15）
+# 安装：E:\Miniconda\envs\ML-base\python.exe -m pip install -r requirements.txt
+# 说明：仅保留实际用到的包——
+#   openai    ：统一调用各 OpenAI-compatible 平台（Kimi/MiMo/Qwen/方舟）
+#   matplotlib：实验 7 模型对比图（docs/figures/ch1_model_compare.png）
+openai==2.37.0
+matplotlib==3.10.9

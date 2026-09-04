@@ -1,0 +1,11 @@
+{
+  "name": "dsh-plugins",
+  "version": "0.1.0",
+  "private": true,
+  "description": "dsh 个人插件 monorepo：latex-helpers / code-verifier / learning-report / pdf-summarizer / greet / dev-snapshot",
+  "scripts": {
+    "build": "pnpm -r run build",
+    "pack": "pnpm -r run pack",
+    "clean": "pnpm -r exec rm -rf lib *.tgz"
+  }
+}

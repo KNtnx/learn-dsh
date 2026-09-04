@@ -1,0 +1,30 @@
+========================================================================
+实验 3：Python 统一调用脚本（多 provider 切换）
+运行时间：2026-08-18T22:18:04
+Python    ：3.11.15
+证据文件  ：E:\game\2026下半年暑假实训\evidence\ch1\03_unified_call.txt
+========================================================================
+
+统一任务问题：用一句话解释 HTTP 的 POST 方法与 JSON 请求体的关系。
+同时调用模型：kimi, mimo
+------------------------------------------------------------------------
+
+[provider] kimi
+[model   ] kimi-k3
+[base_url] https://api.moonshot.cn/v1
+[耗时    ] 11.91 s
+[响应内容] POST 是 HTTP 中向服务器提交数据的方法，而 JSON 只是其请求体（body）常用的一种数据格式——两者是“动作语义”与“数据载体格式”的关系，POST 并不强制使用 JSON，请求体也可以是表单、XML 或二进制数据等。
+[usage  ] prompt_tokens=122, completion_tokens=380, total_tokens=502
+
+[provider] mimo
+[model   ] mimo-v2.5-pro
+[base_url] https://api.xiaomimimo.com/v1
+[耗时    ] 4.78 s
+[响应内容] HTTP 的 POST 方法常用于向服务器提交数据，而 JSON 请求体是 POST 请求中携带结构化数据的一种常用格式。
+[usage  ] prompt_tokens=37, completion_tokens=99, total_tokens=136
+
+========================================================================
+两模型对比摘要（响应长度 / 耗时 / token 用量）
+------------------------------------------------------------------------
+kimi   响应字数= 116  耗时=11.91s  prompt=122 completion=380 total=502
+mimo   响应字数=  61  耗时=4.78s  prompt=37 completion=99 total=136

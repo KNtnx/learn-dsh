@@ -1,0 +1,7 @@
+- insert:
+    - id: my-plugin
+      name: /home/KNtnx/game/agent-lab/deepseek-harness/scratch-plugin/src/my-plugin.ts
+    - id: dev-snapshot
+      name: /home/KNtnx/game/agent-lab/deepseek-harness/scratch-plugin/src/dev-snapshot.ts
+    - id: latex-helpers
+      name: /home/KNtnx/game/agent-lab/deepseek-harness/scratch-plugin/src/latex-helpers.ts
